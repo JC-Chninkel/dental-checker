@@ -205,13 +205,22 @@ function renderCard(item) {
   let brows='';
   if(!bceData?.ok) brows=`<div class="ir"><span class="ir-v ir-warn">${bceData?.error||'?'}</span></div>`;
   else {
+    // Statut global
     brows=`<div class="ir"><span class="ir-l">Statut</span><span class="ir-v ${bceData.found?'ir-ok':'ir-ko'}">${bceData.found?'Active':'Introuvable'}</span></div>`;
-    if(bceData.nom)      brows+=`<div class="ir"><span class="ir-l">Nom</span><span class="ir-v">${bceData.nom}</span></div>`;
+    // Nom officiel BCE en évidence
+    if(bceData.nom)      brows+=`<div class="ir"><span class="ir-l">Nom officiel</span><span class="ir-v" style="font-weight:700;color:#111">${bceData.nom}</span></div>`;
+    // Date de création — mise en avant
+    if(bceData.debut)    brows+=`<div class="ir"><span class="ir-l">Création</span><span class="ir-v" style="font-weight:600;color:#374151">&#128197; ${bceData.debut}</span></div>`;
     if(bceData.type_entite) brows+=`<div class="ir"><span class="ir-l">Type entité</span><span class="ir-v ir-hi">${bceData.type_entite}</span></div>`;
     if(bceData.forme)    brows+=`<div class="ir"><span class="ir-l">Forme jur.</span><span class="ir-v">${bceData.forme}</span></div>`;
-    if(bceData.debut)    brows+=`<div class="ir"><span class="ir-l">Début</span><span class="ir-v">${bceData.debut}</span></div>`;
     if(bceData.situation)brows+=`<div class="ir"><span class="ir-l">Situation</span><span class="ir-v">${bceData.situation}</span></div>`;
-    if(bceData.nace_code)brows+=`<div class="ir"><span class="ir-l">NACE</span><span class="ir-v ir-hi">${bceData.nace_code} — ${bceData.nace_libelle}</span></div>`;
+    if(bceData.nace_code) {
+      const naceTooltip = `Code NACE-BEL ${bceData.nace_code} : activité principale enregistrée à la BCE`;
+      brows+=`<div class="ir"><span class="ir-l">Activité NACE</span><span class="ir-v" style="color:#1d4ed8;font-weight:600" title="${naceTooltip}">
+        <span style="font-family:'Courier New',monospace;background:#eff6ff;padding:1px 5px;border-radius:4px;font-size:11px">${bceData.nace_code}</span>
+        &nbsp;${bceData.nace_libelle}
+      </span></div>`;
+    }
   }
 
   // PEPPOL col
@@ -225,6 +234,7 @@ function renderCard(item) {
            <div class="ir"><span class="ir-l">ID PEPPOL</span><span class="ir-pp">${peppol.peppol_id||'0208:'+bce}</span></div>`;
     if(peppol.doc_types?.length) prows+=`<div class="ir"><span class="ir-l">Documents</span><span class="ir-v">${peppol.doc_types.join(', ')}</span></div>`;
     if(peppol.source) prows+=`<div class="ir"><span class="ir-l">Source</span><span class="ir-v" style="color:#9ca3af">${peppol.source}</span></div>`;
+    if(peppol.dir_url) prows+=`<div class="ir"><span class="ir-l">Lien</span><span class="ir-v"><a href="${peppol.dir_url}" target="_blank" style="color:#1d4ed8;font-size:11px">Voir dans le répertoire ↗</a></span></div>`;
   }
 
   return `<div class="rc">
@@ -247,7 +257,7 @@ function renderCard(item) {
     <div class="rc-foot">
       <a href="https://ec.europa.eu/taxation_customs/vies/#/vat-validation" target="_blank">VIES ↗</a>
       <a href="https://kbopub.economie.fgov.be/kbopub/zoeknummerform.html?nummer=${bce}&lang=fr" target="_blank">BCE ↗</a>
-      <a href="http://smp.belgium.be/${encodeURIComponent('iso6523-actorid-upis::0208:'+bce)}" target="_blank">SMP PEPPOL ↗</a>
+      ${(peppol?.dir_url)?`<a href="${peppol.dir_url}" target="_blank">Répertoire PEPPOL ↗</a>`:''}
     </div>
   </div>`;
 }
@@ -339,7 +349,7 @@ function exportCSV() {
     return [
       e(`BE${bce}`),e(vs),e(vies?.name||''),e(vies?.address||''),
       e(bs),e(bceData?.nom||''),e(bceData?.type_entite||''),e(bceData?.forme||''),
-      e(bceData?.debut||''),e(bceData?.situation||''),
+      e(bceData?.debut||bceData?.date_inscription||''),e(bceData?.situation||''),
       e(bceData?.nace_code||''),e(bceData?.nace_libelle||''),
       e(ps),e(peppol?.peppol_id||''),e((peppol?.doc_types||[]).join(', ')),
       e(today)

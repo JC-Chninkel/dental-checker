@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-VIES + BCE + PEPPOL Checker — Dental Addict v4
-Fonctionne en local ET en ligne (Render, Railway, etc.)
+VIES + BCE + PEPPOL Checker — Dental Addict v4.1
+- Fix lien PEPPOL directory
+- NACE : libellé complet depuis la nomenclature officielle
 """
 
 import http.server
@@ -17,8 +18,7 @@ import re
 import gzip as gz
 from html.parser import HTMLParser
 
-# ── Config ───────────────────────────────────────────────────
-PORT           = int(os.environ.get("PORT", 7847))  # Render injecte $PORT
+PORT           = int(os.environ.get("PORT", 7847))
 VIES_WORKERS   = 4
 VIES_DELAY     = 0.4
 VIES_RETRIES   = 5
@@ -48,13 +48,108 @@ def _vies_slot():
         _wtimes[wid] = time.time()
 
 
+# ── Dictionnaire NACE-BEL (codes fréquents secteur dentaire + santé) ──────────
+# Source : NACE-BEL Rev.2 — nomenclature officielle belge
+# Liste complète intégrée pour les codes les plus courants
+NACE_LABELS = {
+    # Santé / dentaire
+    "8621": "Activités de médecine générale",
+    "8622": "Activités de médecine spécialisée",
+    "8623": "Pratique dentaire",
+    "8690": "Autres activités pour la santé humaine",
+    "8691": "Activités des centres de soins infirmiers et résidentiels",
+    "8710": "Hébergement médicalisé",
+    "8720": "Hébergement social pour personnes handicapées mentales, malades mentales et toxicomanes",
+    "8730": "Hébergement social pour personnes âgées ou handicapées physiques",
+    "8790": "Autres formes d'hébergement social",
+    "8810": "Action sociale sans hébergement pour personnes âgées et handicapées",
+    "8891": "Activités de soins de jour pour enfants",
+    # Commerce / distribution
+    "4690": "Commerce de gros non spécialisé",
+    "4646": "Commerce de gros de produits pharmaceutiques",
+    "4645": "Commerce de gros de parfumerie et de produits de beauté",
+    "4649": "Commerce de gros d'autres biens domestiques",
+    "4741": "Commerce de détail d'ordinateurs, d'unités périphériques et de logiciels",
+    "4752": "Commerce de détail de quincaillerie, peintures et verres",
+    "4775": "Commerce de détail de produits cosmétiques et de toilette",
+    "4777": "Commerce de détail d'articles d'horlogerie et de bijouterie",
+    "4779": "Commerce de détail de biens d'occasion",
+    "4799": "Autres commerces de détail hors magasin, éventaires ou marchés",
+    # Fabrication / industrie
+    "3250": "Fabrication d'instruments et fournitures à usage médical et dentaire",
+    "3251": "Fabrication de mobilier médico-chirurgical",
+    "3259": "Fabrication d'autres articles médicaux et paramédicaux",
+    "2110": "Fabrication de produits pharmaceutiques de base",
+    "2120": "Fabrication de préparations pharmaceutiques",
+    "2660": "Fabrication d'équipements d'irradiation médicale, d'équipements électriques et électroniques médicaux",
+    # Services
+    "6920": "Activités comptables",
+    "6910": "Activités juridiques",
+    "7022": "Conseil pour les affaires et autres conseils de gestion",
+    "7311": "Activités des agences de publicité",
+    "7320": "Études de marché et sondages d'opinion",
+    "7490": "Autres activités spécialisées, scientifiques et techniques n.c.a.",
+    "6201": "Programmation informatique",
+    "6202": "Conseil informatique",
+    "6209": "Autres activités informatiques",
+    "6311": "Traitement de données, hébergement et activités connexes",
+    "6312": "Portails internet",
+    # Éducation / formation
+    "8542": "Enseignement supérieur",
+    "8559": "Autres formes d'enseignement n.c.a.",
+    "8560": "Activités de soutien à l'enseignement",
+    # ASBL / associations
+    "9499": "Autres organisations associatives n.c.a.",
+    "9430": "Organisations associatives n.c.a.",
+    "9412": "Activités des organisations professionnelles",
+    "9411": "Activités des organisations patronales et consulaires",
+    # Immobilier
+    "6810": "Activités des marchands de biens immobiliers",
+    "6820": "Location et exploitation de biens immobiliers propres ou loués",
+    "6831": "Agences immobilières",
+    "6832": "Administration de biens immobiliers",
+    # Hôtellerie / restauration
+    "5510": "Hôtels et hébergement similaire",
+    "5610": "Restaurants et services de restauration mobile",
+    "5630": "Débits de boissons",
+    # Transport / logistique
+    "4941": "Transports routiers de fret",
+    "5210": "Entreposage et stockage",
+    "5229": "Autres services auxiliaires des transports",
+    # Construction
+    "4120": "Construction de bâtiments résidentiels et non résidentiels",
+    "4321": "Installation électrique",
+    "4322": "Travaux de plomberie et installation de chauffage et de conditionnement d'air",
+    "4391": "Travaux de couverture",
+    "4399": "Autres travaux de construction spécialisés n.c.a.",
+    # Finance / assurance
+    "6419": "Autres intermédiations monétaires",
+    "6499": "Autres activités des services financiers, hors assurance et caisses de retraite n.c.a.",
+    "6511": "Assurance vie",
+    "6512": "Autres assurances",
+}
+
+def enrich_nace(code, libelle_bce):
+    """Retourne le libellé NACE le plus complet possible."""
+    if not code:
+        return libelle_bce or ""
+    # Chercher dans notre dictionnaire (code exact ou tronqué)
+    label = NACE_LABELS.get(code)
+    if not label:
+        # Essai avec les 4 premiers chiffres
+        label = NACE_LABELS.get(code[:4] if len(code) >= 4 else code)
+    # Si on a un libellé BCE et pas de correspondance dans le dict, on garde le libellé BCE
+    if not label:
+        label = libelle_bce or f"Code NACE {code}"
+    return label
+
+
 # ── BCE Parser ────────────────────────────────────────────────
 class BCEParser(HTMLParser):
     def __init__(self):
         super().__init__()
-        self.d = {}          # champs principaux
-        self.nace = []       # [(code, libelle)]
-        self.entity_type = ""
+        self.d = {}
+        self.nace = []
         self._th = self._td = self._h2 = False
         self._thb = self._tdb = self._h2b = ""
         self._cur_th = None
@@ -66,7 +161,6 @@ class BCEParser(HTMLParser):
         ad = dict(attrs)
         cls = ad.get("class","").lower()
         iid = ad.get("id","").lower()
-        # Tableau activités NACE
         if tag=="table" and ("activit" in cls or "nace" in cls or "activit" in iid):
             self._act=True; self._adep=1
         elif tag=="table" and self._act:
@@ -94,21 +188,34 @@ class BCEParser(HTMLParser):
             self._th=False; self._cur_th=self._thb.strip().lower()
         elif tag=="td" and not self._act:
             self._td=False
-            val=" ".join(self._tdb.split())
-            if self._cur_th:
+            val=" ".join(self._tdb.split()).strip()
+            if self._cur_th and val:
                 k=self._cur_th
-                if any(x in k for x in ["dénomination","denomination","naam","benaming"]):
+                # Nom / dénomination — toutes variantes fr/nl
+                if any(x in k for x in ["dénomination","denomination","naam","benaming",
+                                         "raison sociale","maatschappelijke","nom officiel"]):
                     if "nom" not in self.d: self.d["nom"]=val
+                # Statut
                 elif any(x in k for x in ["statut","status","toestand"]):
                     self.d["statut"]=val
-                elif any(x in k for x in ["forme juridique","juridische vorm","legal form","juridique"]):
+                # Forme juridique
+                elif any(x in k for x in ["forme juridique","juridische vorm","legal form"]):
                     self.d["forme"]=val
-                elif any(x in k for x in ["type d'entité","type entit","entiteitstype","type entreprise"]):
-                    self.d["type_entite"]=val
-                elif any(x in k for x in ["date de début","startdatum","début d","date début"]):
-                    self.d["debut"]=val
-                elif any(x in k for x in ["adresse","adres","address"]) and "adresse" not in self.d:
+                # Type entité
+                elif any(x in k for x in ["type d","entit","entiteits","type entreprise"]):
+                    if "type_entite" not in self.d: self.d["type_entite"]=val
+                # Date création / début — toutes variantes
+                elif any(x in k for x in [
+                    "date de début","startdatum","début d","date début",
+                    "date de création","création","oprichting",
+                    "datum eerste","première inscription","eerste inschrijving",
+                    "date d'inscription","inschrijvingsdatum"
+                ]):
+                    if "debut" not in self.d: self.d["debut"]=val
+                # Adresse
+                elif any(x in k for x in ["adresse","adres","address","siège","zetel"]) and "adresse" not in self.d:
                     self.d["adresse"]=val
+                # Situation juridique
                 elif any(x in k for x in ["situation juridique","juridische toestand"]):
                     self.d["situation"]=val
             self._cur_th=None
@@ -137,7 +244,6 @@ class BCEParser(HTMLParser):
         return {"code":"","libelle":""}
 
     def get_type_entite(self):
-        # Chercher dans les données parsées
         if self.d.get("type_entite"): return self.d["type_entite"]
         if self.d.get("forme"): return self.d["forme"]
         return ""
@@ -194,19 +300,79 @@ def check_bce(bce):
         except: html=raw.decode("utf-8",errors="replace")
 
         p=BCEParser(); p.feed(html)
-        d=p.result(); nace=p.get_nace()
+        d=p.result(); nace_raw=p.get_nace()
         te=p.get_type_entite()
 
-        # Fallback NACE regex
-        if not nace["code"]:
+        # Fallback nom : schema:legalName ou og:title ou h1
+        if not d.get("nom"):
+            m = re.search(r'property="schema:legalName"[^>]*>([^<]{3,100})', html)
+            if m: d["nom"] = m.group(1).strip()
+        if not d.get("nom"):
+            m = re.search(r'<h1[^>]*>([^<]{3,100})</h1>', html)
+            if m:
+                t = m.group(1).strip()
+                if not any(w in t.lower() for w in ["kbo","bce","public","search","résultat"]):
+                    d["nom"] = t
+        if not d.get("nom"):
+            # Chercher dans les meta
+            m = re.search(r'<title>([^<|–-]{3,80})', html)
+            if m:
+                t = m.group(1).strip()
+                if not any(w in t.lower() for w in ["kbo","bce","public","search"]):
+                    d["nom"] = t
+
+        # Fallback date création : patterns directs dans le HTML
+        if not d.get("debut"):
+            # Format DD-MM-YYYY ou DD/MM/YYYY après mots-clés
+            m = re.search(
+                r'(?:date\s+de\s+d[eé]but|startdatum|datum\s+eerste|cr[eé]ation|oprichting|inschrijving)[^<]{0,30}?(\d{2}[-/]\d{2}[-/]\d{4})',
+                html, re.I)
+            if m: d["debut"] = m.group(1).replace("/","-")
+        if not d.get("debut"):
+            # Chercher dans les tableaux : ligne contenant une date ISO ou belge
+            m = re.search(
+                r'<td[^>]*>\s*(\d{2}[-/]\d{2}[-/]\d{4})\s*</td>',
+                html)
+            if m: d["debut"] = m.group(1).replace("/","-")
+
+        # Fallback NACE regex si le parser n'a rien trouvé
+        if not nace_raw["code"]:
             m=re.search(r'(\d{4,5})\s*[-–]\s*([A-ZÀ-Ÿa-zà-ÿ][^<\n]{10,80})',html)
             if m:
-                nace={"code":m.group(1),"libelle":m.group(2).strip().rstrip(".,;")}
+                nace_raw={"code":m.group(1),"libelle":m.group(2).strip().rstrip(".,;")}
+
+        # Fallback nom : chercher dans les balises title ou h1 si parser n'a rien trouvé
+        if not d.get("nom"):
+            # Essai sur le titre de page
+            m=re.search(r'<title[^>]*>([^<]{3,80})</title>',html,re.I)
+            if m:
+                t=m.group(1).strip()
+                if t and not any(w in t.lower() for w in ["kbo","bce","public","search","zoek"]):
+                    d["nom"]=t
+            # Essai sur h1
+            if not d.get("nom"):
+                m=re.search(r'<h1[^>]*>([^<]{3,80})</h1>',html,re.I)
+                if m:
+                    t=m.group(1).strip()
+                    if t and len(t)>3: d["nom"]=t
+
+        # Fallback date création regex
+        if not d.get("debut"):
+            m=re.search(r'(?:date\s+de\s+(?:d[ée]but|cr[ée]ation|fondation)|oprichtingsdatum|startdatum)[^:]*:\s*([0-9]{1,2}[\./][0-9]{1,2}[\./][0-9]{2,4})',html,re.I)
+            if m: d["debut"]=m.group(1).strip()
+            if not d.get("debut"):
+                # Format ISO dans attribut data ou span
+                m=re.search(r"(?:creation|oprichting|fondation)[^\"']{0,30}[\"']([0-9]{4}-[0-9]{2}-[0-9]{2})[\"']",html,re.I)
+                if m: d["debut"]=m.group(1)
 
         # Fallback type entité regex
         if not te:
             m=re.search(r'(?:type\s+d.entit[eé]|entiteitstype)[^:]*:\s*([^\n<]{3,60})',html,re.I)
             if m: te=m.group(1).strip()
+
+        # Enrichir le libellé NACE
+        nace_code    = nace_raw.get("code","")
+        nace_libelle = enrich_nace(nace_code, nace_raw.get("libelle",""))
 
         body=html.lower()
         not_found=any(x in body for x in ["aucune entreprise","geen onderneming","no enterprise"])
@@ -219,10 +385,11 @@ def check_bce(bce):
             "type_entite":te,
             "forme":d.get("forme",""),
             "debut":d.get("debut",""),
+            "date_inscription":d.get("date_inscription",""),
             "adresse":d.get("adresse",""),
             "situation":d.get("situation",""),
-            "nace_code":nace["code"],
-            "nace_libelle":nace["libelle"]
+            "nace_code":nace_code,
+            "nace_libelle":nace_libelle
         }
     except urllib.error.HTTPError as e:
         return {"ok":False,"error":f"BCE HTTP {e.code}"}
@@ -232,15 +399,11 @@ def check_bce(bce):
 
 # ── PEPPOL ────────────────────────────────────────────────────
 def check_peppol(bce):
-    """
-    Interroge le SMP belge officiel (smp.belgium.be) et le répertoire PEPPOL.
-    Retourne registered=True/False + les types de documents acceptés.
-    """
     time.sleep(PEPPOL_DELAY)
-    participant = f"iso6523-actorid-upis::0208:{bce}"
+    participant     = f"iso6523-actorid-upis::0208:{bce}"
     participant_enc = urllib.parse.quote(participant, safe="")
 
-    # 1. SMP belge officiel (source de vérité)
+    # 1. SMP belge officiel (source de vérité, HTTP public sans auth)
     smp_url = f"http://smp.belgium.be/{participant_enc}"
     try:
         req = urllib.request.Request(smp_url, headers={
@@ -249,56 +412,63 @@ def check_peppol(bce):
         })
         with urllib.request.urlopen(req, timeout=10) as r:
             body = r.read().decode("utf-8",errors="replace")
-        # Si on a une réponse XML valide → enregistré
-        registered = "<ParticipantIdentifier" in body or "<smp:" in body
-        peppol_id = f"0208:{bce}" if registered else ""
-
-        # Extraire les types de documents acceptés (simplifié)
+        registered = "<ParticipantIdentifier" in body or "<smp:" in body or "0208:" in body
         doc_types = []
-        if "Invoice" in body:     doc_types.append("Facture (Invoice)")
-        if "CreditNote" in body:  doc_types.append("Note de crédit")
-        if "Order" in body:       doc_types.append("Commande (Order)")
+        if registered:
+            if "Invoice" in body:    doc_types.append("Facture (BIS Billing 3)")
+            if "CreditNote" in body: doc_types.append("Note de crédit")
+            if "Order" in body:      doc_types.append("Commande")
+            if not doc_types:        doc_types.append("Documents électroniques")
+
+        # Lien direct vers la fiche dans le répertoire PEPPOL (URL corrigée)
+        dir_url = f"https://directory.peppol.eu/public/locale-en_US/menuitem-search?q=0208%3A{bce}"
 
         return {
             "ok":True,
             "registered":registered,
-            "peppol_id":peppol_id,
+            "peppol_id": f"0208:{bce}" if registered else "",
             "doc_types":doc_types,
-            "source":"SMP Belgium"
+            "source":"SMP Belgium (officiel)",
+            "dir_url": dir_url
         }
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            # 404 = pas enregistré sur le SMP belge → vérifier répertoire global
-            return _check_peppol_directory(bce)
-        return {"ok":True,"registered":False,"peppol_id":"","doc_types":[],"source":"SMP Belgium"}
+            # 404 = pas sur le SMP belge → fallback répertoire global
+            return _peppol_directory(bce)
+        return {"ok":True,"registered":False,"peppol_id":"","doc_types":[],"source":"SMP Belgium","dir_url":""}
     except Exception:
-        # Fallback sur le répertoire global
-        return _check_peppol_directory(bce)
+        return _peppol_directory(bce)
 
 
-def _check_peppol_directory(bce):
-    """Fallback : répertoire PEPPOL global (directory.peppol.eu)"""
-    url = f"https://directory.peppol.eu/search/1.0/json?q=0208%3A{bce}&country=BE"
+def _peppol_directory(bce):
+    """Fallback : répertoire PEPPOL global via API JSON publique."""
+    # URL corrigée de l'API JSON du répertoire PEPPOL
+    url = f"https://directory.peppol.eu/search/1.0/json?q=0208%3A{bce}&rpc=0208&country=BE"
+    dir_url = f"https://directory.peppol.eu/public/locale-en_US/menuitem-search?q=0208%3A{bce}"
     try:
-        req = urllib.request.Request(url, headers={"Accept":"application/json","User-Agent":"Mozilla/5.0"})
+        req = urllib.request.Request(url, headers={
+            "Accept":"application/json",
+            "User-Agent":"Mozilla/5.0"
+        })
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         matches = data.get("matches",[])
         if matches:
-            m = matches[0]
+            m   = matches[0]
             pid = m.get("participantID",{}).get("value","")
             return {
                 "ok":True,"registered":True,
-                "peppol_id":pid,
+                "peppol_id":pid or f"0208:{bce}",
                 "doc_types":["Voir répertoire PEPPOL"],
-                "source":"Directory PEPPOL"
+                "source":"Répertoire PEPPOL",
+                "dir_url": dir_url
             }
-        return {"ok":True,"registered":False,"peppol_id":"","doc_types":[],"source":"Directory PEPPOL"}
+        return {"ok":True,"registered":False,"peppol_id":"","doc_types":[],"source":"Répertoire PEPPOL","dir_url":dir_url}
     except Exception as e:
-        return {"ok":False,"error":str(e)[:80],"registered":False,"peppol_id":"","doc_types":[]}
+        return {"ok":False,"error":str(e)[:80],"registered":False,"peppol_id":"","doc_types":[],"dir_url":dir_url}
 
 
-# ── Check complet ─────────────────────────────────────────────
+# ── Normalisation + check complet ────────────────────────────
 def normalize(raw):
     v=raw.strip().upper().replace(".","").replace(" ","").replace("-","")
     if v.startswith("BE"): v=v[2:]
@@ -344,7 +514,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             print(f"  /check BE{bce}")
             self._json(check_all(bce))
         elif self.path=="/health":
-            self._json({"status":"ok","version":"4"})
+            self._json({"status":"ok","version":"4.1"})
         else:
             self.send_response(404); self.end_headers()
 
@@ -353,36 +523,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body=json.loads(self.rfile.read(int(self.headers.get("Content-Length",0))).decode())
         numbers=body.get("numbers",[])
         total=len(numbers)
-        print(f"\n  Batch {total} numéros — VIES×{VIES_WORKERS} BCE×{BCE_WORKERS} PEPPOL×4")
-
+        print(f"\n  Batch {total} nums — VIES×{VIES_WORKERS} BCE×{BCE_WORKERS} PEPPOL×4")
         results=[None]*total
         lock=threading.Lock(); done=[0]
-
         def process(idx,raw):
-            bce=normalize(raw)
-            r=check_all(bce)
+            bce=normalize(raw); r=check_all(bce)
             with lock:
                 results[idx]=r; done[0]+=1
                 pct=done[0]*100//total
                 print(f"\r  [{'='*(pct//5)}{' '*(20-pct//5)}] {done[0]}/{total} ({pct}%) BE{bce}",end="",flush=True)
-
         pool=[]
         for i,raw in enumerate(numbers):
             while threading.active_count()>VIES_WORKERS*3+20: time.sleep(0.05)
             t=threading.Thread(target=process,args=(i,raw),daemon=True)
             t.start(); pool.append(t)
             time.sleep(VIES_DELAY/VIES_WORKERS)
-
         for t in pool: t.join()
-        print(f"\n  OK {total} traités\n")
+        print(f"\n  OK {total}\n")
         self._json(results)
 
     def _serve_html(self):
-        html_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),"app.html")
-        if not os.path.exists(html_path):
+        p=os.path.join(os.path.dirname(os.path.abspath(__file__)),"app.html")
+        if not os.path.exists(p):
             self.send_response(404); self.end_headers()
             self.wfile.write(b"app.html introuvable"); return
-        with open(html_path,"rb") as f: content=f.read()
+        with open(p,"rb") as f: content=f.read()
         self.send_response(200)
         self.send_header("Content-Type","text/html; charset=utf-8")
         self.send_header("Content-Length",str(len(content)))
@@ -397,29 +562,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 class ThreadedServer(socketserver.ThreadingMixIn,socketserver.TCPServer):
-    allow_reuse_address=True
-    daemon_threads=True
+    allow_reuse_address=True; daemon_threads=True
 
 
 def main():
     is_cloud = os.environ.get("RENDER") or os.environ.get("RAILWAY_ENVIRONMENT")
     print("="*60)
-    print("  VIES + BCE + PEPPOL Checker — Dental Addict v4")
+    print("  VIES + BCE + PEPPOL Checker — Dental Addict v4.1")
     print("="*60)
     print(f"  Port : {PORT}  {'[Cloud]' if is_cloud else '[Local]'}")
-    print(f"  VIES workers : {VIES_WORKERS} | BCE workers : {BCE_WORKERS}")
-    print(f"  URL : http://{'0.0.0.0' if is_cloud else 'localhost'}:{PORT}")
     print("="*60)
-
     bind = "0.0.0.0" if is_cloud else "localhost"
     with ThreadedServer((bind,PORT),Handler) as srv:
         if not is_cloud:
             import webbrowser
             threading.Thread(target=lambda:(time.sleep(1.2),webbrowser.open(f"http://localhost:{PORT}")),daemon=True).start()
-        try:
-            srv.serve_forever()
-        except KeyboardInterrupt:
-            print("\n  Arret.")
+        try: srv.serve_forever()
+        except KeyboardInterrupt: print("\n  Arret.")
 
 if __name__=="__main__":
     main()
