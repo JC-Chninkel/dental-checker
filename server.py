@@ -647,6 +647,75 @@ def _debug_search(query):
     except Exception as e:
         results["mobile"] = {"ok": False, "error": str(e)}
 
+
+    # ── Test 4 : two-step avec cookie de session ─────────────
+    try:
+        import http.cookiejar
+        cj  = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+
+        # Étape 1 : charger le formulaire pour obtenir le cookie de session
+        r1 = opener.open("https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr", timeout=10)
+        html_form = r1.read().decode("utf-8", errors="replace")
+
+        # Extraire le token CSRF / hidden fields si présents
+        import re as _re
+        hidden = _re.findall('<input[^>]+name=[^>]*>', html_form, _re.I)
+        # Aussi extraire l'action du formulaire
+        form_action = _re.search('<form[^>]+action=.([^"\' >]+)', html_form, _re.I)
+
+        results["session_info"] = {
+            "cookies": [{"name": c.name, "value": c.value[:20]} for c in cj],
+            "hidden_fields": hidden[:5],
+            "form_action": form_action.group(1) if form_action else None,
+            "form_snippet": html_form[html_form.find("<form"):html_form.find("<form")+400] if "<form" in html_form else "no form found"
+        }
+
+        # Étape 2 : soumettre avec le cookie
+        post_data2 = {"searchWord": query, "_activeq": "on", "actionLu": "Zoek", "lang": "fr"}
+        for name, val in hidden:
+            post_data2[name] = val
+
+        encoded = urllib.parse.urlencode(post_data2).encode("utf-8")
+        req2 = urllib.request.Request(
+            form_action.group(1) if form_action and form_action.group(1).startswith("http")
+            else "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html",
+            data=encoded,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "fr-FR,fr;q=0.95",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr"
+            }
+        )
+        r2 = opener.open(req2, timeout=15)
+        html2 = r2.read().decode("utf-8", errors="replace")
+
+        bces2  = _re.findall(r'\d{4}[.\s]\d{3}[.\s]\d{3}', html2)
+        links2 = _re.findall(r'href="([^"]*zoeknummerform[^"]*)"', html2, _re.I)
+        # Extraire les lignes de tableau
+        trs2 = _re.findall(r'<tr[^>]*>(.*?)</tr>', html2, _re.DOTALL | _re.I)
+        rows2 = []
+        for tr in trs2[:15]:
+            tds = _re.findall(r'<td[^>]*>(.*?)</td>', tr, _re.DOTALL | _re.I)
+            clean = [_re.sub(r'<[^>]+>', '', td).strip() for td in tds]
+            clean = [c for c in clean if c and len(c) > 1]
+            if clean: rows2.append(clean)
+
+        results["two_step"] = {
+            "ok": True,
+            "html_length": len(html2),
+            "bce_numbers": bces2[:10],
+            "links": links2[:5],
+            "rows": rows2[:10],
+            "snippet_middle": html2[3000:5000]
+        }
+
+    except Exception as e:
+        import traceback
+        results["two_step"] = {"ok": False, "error": str(e), "trace": traceback.format_exc()[-400:]}
+
     return {"query": query, "results": results}
 
 def search_bce_by_name(query):
