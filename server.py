@@ -673,8 +673,12 @@ def _debug_search(query):
 
         # Étape 2 : soumettre avec le cookie
         post_data2 = {"searchWord": query, "_activeq": "on", "actionLu": "Zoek", "lang": "fr"}
-        for name, val in hidden:
-            post_data2[name] = val
+        # hidden est une liste de strings HTML — extraire name/value manuellement
+        for h in hidden:
+            nm = _re.search(r'name=["\'](\w+)["\'"]', h)
+            vl = _re.search(r'value=["\'"]([^"\']*)["\'"]', h)
+            if nm and vl and nm.group(1) not in ("searchWord",):
+                post_data2[nm.group(1)] = vl.group(1)
 
         encoded = urllib.parse.urlencode(post_data2).encode("utf-8")
         req2 = urllib.request.Request(
@@ -719,55 +723,44 @@ def _debug_search(query):
     return {"query": query, "results": results}
 
 def search_bce_by_name(query):
-    """
-    Recherche par nom sur BCE Public Search.
-    Méthode : GET avec cookie de session (JSESSIONID requis).
-    Formulaire : method="get" action="/kbopub/zoeknaamfonetischform.html"
-    """
+    """Recherche BCE par nom — GET avec cookies de session."""
     import http.cookiejar
-
     query_clean = query.strip()
+
     cj     = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-
-    base_headers = {
+    hdrs   = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "fr-FR,fr;q=0.95",
     }
 
     try:
-        # Étape 1 : charger le formulaire pour obtenir les cookies de session
-        r1 = opener.open(
-            urllib.request.Request(
-                "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr",
-                headers=base_headers
-            ), timeout=10
-        )
-        r1.read()  # consommer la réponse
+        # Étape 1 — récupérer les cookies de session
+        opener.open(urllib.request.Request(
+            "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr",
+            headers=hdrs), timeout=10).read()
 
-        # Étape 2 : soumettre le formulaire en GET avec les cookies
-        search_url = ("https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?"
-                      + urllib.parse.urlencode({
-                          "searchWord": query_clean,
-                          "_activeq":   "on",
-                          "actionLu":   "Zoek",
-                          "lang":       "fr"
-                      }))
-        req2 = urllib.request.Request(search_url, headers={
-            **base_headers,
+        # Étape 2 — soumettre la recherche GET avec les cookies
+        url = ("https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?"
+               + urllib.parse.urlencode({
+                   "searchWord": query_clean,
+                   "_activeq":   "on",
+                   "actionLu":   "Zoek",
+                   "lang":       "fr"
+               }))
+        r = opener.open(urllib.request.Request(url, headers={
+            **hdrs,
             "Referer": "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr"
-        })
-        r2   = opener.open(req2, timeout=15)
-        html = r2.read().decode("utf-8", errors="replace")
+        }), timeout=15)
+        html = r.read().decode("utf-8", errors="replace")
 
-        results = _parse_bce_search_results(html, query_clean)
+        results = _parse_bce_search_results(html)
 
-        # Dédoublonner
         seen, unique = set(), []
-        for r in results:
-            if r["bce"] and r["bce"] not in seen and len(r["bce"]) == 10:
-                seen.add(r["bce"]); unique.append(r)
+        for item in results:
+            if item["bce"] not in seen and len(item["bce"]) == 10:
+                seen.add(item["bce"]); unique.append(item)
 
         return {"ok": True, "results": unique[:30], "query": query_clean}
 
@@ -775,47 +768,43 @@ def search_bce_by_name(query):
         return {"ok": False, "error": str(e)[:120], "results": [], "query": query_clean}
 
 
-def _parse_bce_search_results(html, query):
-    """Parse les résultats BCE — structure réelle connue depuis debug."""
+def _parse_bce_search_results(html):
+    """
+    Parse les résultats BCE Public Search.
+    Structure connue : liens <a href="/kbopub/zoeknummerform.html?nummer=XXXXXXXXXX&lang=fr">Nom</a>
+    dans un tableau de résultats.
+    """
     results = []
 
-    # Les résultats sont dans des liens href contenant 'zoeknummerform' + 'nummer='
-    # Ex: <a href="/kbopub/zoeknummerform.html?nummer=0123456789&amp;lang=fr">Nom Entreprise</a>
+    # Pattern principal — liens vers les fiches entreprise avec numéro BCE
     link_re = re.compile(
-        r'<a\s+href="[^"]*zoeknummerform[^"]*[?&]nummer=(\d+)[^"]*"[^>]*>([^<]+)</a>',
+        r'href=["\'](/kbopub/zoeknummerform\.html\?[^"\']*nummer=(\d+)[^"\']*)["\'"][^>]*>'
+        r'([^<]{2,80})</a>',
         re.IGNORECASE
     )
     for m in link_re.finditer(html):
-        bce = m.group(1).strip()
-        nom = m.group(2).strip()
-        # Nettoyer le nom (enlever espaces multiples)
-        nom = re.sub(r'\s+', ' ', nom)
-        if len(bce) == 10 and nom and len(nom) > 1:
-            # Chercher statut dans les ~300 chars autour du lien
-            ctx = html[max(0, m.start()-300):m.end()+300].lower()
-            if "actif" in ctx or "actief" in ctx:
-                statut = "Actif"
-            elif "arrêt" in ctx or "gestopt" in ctx or "beëindigd" in ctx:
-                statut = "Arrêté"
-            else:
-                statut = ""
+        bce = m.group(2).strip()
+        nom = re.sub(r'\s+', ' ', m.group(3)).strip()
+        # Ignorer les noms parasites (navigation, etc.)
+        if (len(bce) == 10
+                and nom
+                and len(nom) > 1
+                and nom.lower() not in ("accueil","contact","disclaimer","nouveautés")):
+            ctx    = html[max(0, m.start()-400):m.end()+200].lower()
+            statut = ("Actif"   if "actif"   in ctx or "actief"     in ctx else
+                      "Arrêté" if "arrêt"   in ctx or "beëindigd"  in ctx or "gestopt" in ctx
+                      else "")
             results.append({"bce": bce, "nom": nom[:80], "statut": statut})
 
-    # Fallback : extraire depuis les <td> qui contiennent un numéro BCE formaté
+    # Fallback — regex sur numéros formatés 0XXX.XXX.XXX dans le HTML
     if not results:
-        row_re = re.compile(r'<tr[^>]*>(.*?)</tr>', re.DOTALL | re.IGNORECASE)
-        for row in row_re.finditer(html):
-            row_html = row.group(1)
-            bce_m = re.search(r'(\d{4})\.(\d{3})\.(\d{3})', row_html)
-            if not bce_m:
-                continue
-            bce = bce_m.group(1) + bce_m.group(2) + bce_m.group(3)
-            # Extraire texte des cellules
-            cells = re.findall(r'<td[^>]*>(.*?)</td>', row_html, re.DOTALL | re.I)
-            texts = [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
-            texts = [t for t in texts if t and len(t) > 1]
-            nom   = next((t for t in texts if not re.match(r'^\d', t) and len(t) > 3), "")
-            results.append({"bce": bce, "nom": nom[:80], "statut": ""})
+        for m in re.finditer(r'(\d{4})\.(\d{3})\.(\d{3})', html):
+            bce = m.group(1) + m.group(2) + m.group(3)
+            # Chercher un nom dans le voisinage du numéro
+            snippet = html[max(0, m.start()-200):m.end()+200]
+            nom_m   = re.search(r'>([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\s\-\.]{3,60})<', snippet)
+            nom     = nom_m.group(1).strip() if nom_m else ""
+            results.append({"bce": bce, "nom": nom, "statut": ""})
 
     return results
 
