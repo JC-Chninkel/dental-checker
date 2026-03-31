@@ -92,6 +92,20 @@ textarea:focus { border-color:#003087; }
 .s-chip  { padding:3px 12px; border-radius:99px; font-size:11px; font-weight:700; }
 
 .footer { text-align:center; font-size:11px; color:#9ca3af; margin-top:14px; }
+
+/* Search results */
+.sr-list { display:flex; flex-direction:column; gap:6px; margin-top:4px; }
+.sr-item { display:flex; align-items:center; gap:10px; padding:10px 14px; background:white; border:1px solid #e5e7eb; border-radius:10px; cursor:pointer; transition:all .15s; }
+.sr-item:hover { border-color:#003087; background:#f0f5ff; }
+.sr-num  { font-family:'Courier New',monospace; font-size:13px; font-weight:700; color:#003087; white-space:nowrap; }
+.sr-nom  { font-size:13px; font-weight:600; flex:1; }
+.sr-stat { font-size:11px; font-weight:700; padding:2px 8px; border-radius:99px; white-space:nowrap; }
+.sr-act  { background:#dcfce7; color:#166534; }
+.sr-stop { background:#fee2e2; color:#991b1b; }
+.sr-unk  { background:#f3f4f6; color:#6b7280; }
+.sr-arrow{ color:#9ca3af; font-size:14px; }
+.sr-empty{ text-align:center; padding:24px; color:#9ca3af; font-size:13px; }
+.sr-count{ font-size:12px; color:#6b7280; margin-bottom:8px; font-weight:600; }
 </style>
 </head>
 <body>
@@ -114,6 +128,7 @@ textarea:focus { border-color:#003087; }
     <div class="tabs">
       <button class="tab active" onclick="switchTab('single')">🔍 Unitaire</button>
       <button class="tab" onclick="switchTab('batch')">📋 En lot</button>
+      <button class="tab" onclick="switchTab('name')">🏢 Par nom</button>
     </div>
 
     <!-- SINGLE -->
@@ -127,6 +142,18 @@ textarea:focus { border-color:#003087; }
       </div>
       <p class="hint">VIES + BCE + PEPPOL en parallèle</p>
       <div id="res-single" style="margin-top:14px"></div>
+    </div>
+
+    <!-- SEARCH BY NAME -->
+    <div id="pane-name" style="display:none">
+      <label>Nom de la société (recherche phonétique BCE)</label>
+      <div class="input-row">
+        <input type="text" id="inp-name" placeholder="ex: Cabinet dentaire Dupont, Dental..." 
+          style="flex:1" onkeydown="if(event.key==='Enter')goSearch()" />
+        <button class="btn btn-p" id="btn-name" onclick="goSearch()">Rechercher</button>
+      </div>
+      <p class="hint">Recherche phonétique — variantes orthographiques acceptées</p>
+      <div id="res-name" style="margin-top:14px"></div>
     </div>
 
     <!-- BATCH -->
@@ -167,7 +194,9 @@ function norm(r) {
 function switchTab(t) {
   document.getElementById('pane-single').style.display=t==='single'?'block':'none';
   document.getElementById('pane-batch').style.display=t==='batch'?'block':'none';
-  document.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('active',(i===0&&t==='single')||(i===1&&t==='batch')));
+  document.getElementById('pane-name').style.display=t==='name'?'block':'none';
+  document.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('active',
+    (i===0&&t==='single')||(i===1&&t==='batch')||(i===2&&t==='name')));
 }
 
 function renderCard(item) {
@@ -330,6 +359,63 @@ async function goBatch() {
   zone.insertBefore(sum,zone.firstChild);
   document.getElementById('btn-csv').style.display='inline-block';
   pw.style.display='none'; pl.style.display='none'; btn.disabled=false;
+}
+
+async function goSearch() {
+  const q = document.getElementById('inp-name').value.trim();
+  const zone = document.getElementById('res-name');
+  const btn  = document.getElementById('btn-name');
+  if(!q) return;
+  btn.disabled=true; btn.textContent='...';
+  zone.innerHTML=`<div class="load-card"><div class="spinner"></div><div class="spin-txt">Recherche BCE — "${q}"…</div></div>`;
+  try {
+    const r = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
+    const data = await r.json();
+    if(!data.ok) {
+      zone.innerHTML=`<div class="sr-empty">Erreur : ${data.error}</div>`;
+    } else if(!data.results.length) {
+      zone.innerHTML=`<div class="sr-empty">Aucun résultat pour "${q}"<br><span style="font-size:11px">Essayez avec un nom plus court ou une variante orthographique</span></div>`;
+    } else {
+      let out = `<div class="sr-count">${data.results.length} résultat(s) — cliquez pour vérifier</div><div class="sr-list">`;
+      data.results.forEach(r => {
+        const sc = r.statut==='Actif'?'sr-act':r.statut==='Arrêté'?'sr-stop':'sr-unk';
+        const sl = r.statut||'Inconnu';
+        const nom = r.nom || '(nom non extrait)';
+        out += `<div class="sr-item" onclick="selectCompany('${r.bce}','${nom.replace(/'/g,"\'")}')">
+          <span class="sr-num">BE${r.bce.replace(/(\d{4})(\d{3})(\d{3})/,'$1.$2.$3')}</span>
+          <span class="sr-nom">${nom}</span>
+          <span class="sr-stat ${sc}">${sl}</span>
+          <span class="sr-arrow">›</span>
+        </div>`;
+      });
+      out += '</div>';
+      zone.innerHTML = out;
+    }
+  } catch(e) {
+    zone.innerHTML=`<div class="sr-empty">Erreur réseau : ${e.message}</div>`;
+  }
+  btn.disabled=false; btn.textContent='Rechercher';
+}
+
+async function selectCompany(bce, nom) {
+  // Basculer sur l'onglet unitaire avec ce numéro
+  switchTab('single');
+  document.getElementById('inp').value = bce;
+  // Afficher un indicateur
+  document.getElementById('res-single').innerHTML=`<div class="load-card"><div class="spinner"></div><div class="spin-txt">Vérification VIES + BCE + PEPPOL — <strong>${nom}</strong> (BE${bce})…</div></div>`;
+  // Déclencher la vérification
+  const btn = document.getElementById('btn1');
+  btn.disabled=true; btn.textContent='...';
+  try {
+    const r = await fetch(`${API}/check?bce=${bce}`);
+    const data = await r.json();
+    document.getElementById('res-single').innerHTML = renderCard(data);
+  } catch(e) {
+    document.getElementById('res-single').innerHTML=`<div class="rc" style="padding:12px 16px;color:#991b1b">Erreur : ${e.message}</div>`;
+  }
+  btn.disabled=false; btn.textContent='Vérifier';
+  // Scroll vers le résultat
+  document.getElementById('res-single').scrollIntoView({behavior:'smooth', block:'start'});
 }
 
 function exportCSV() {

@@ -468,6 +468,130 @@ def _peppol_directory(bce):
         return {"ok":False,"error":str(e)[:80],"registered":False,"peppol_id":"","doc_types":[],"dir_url":dir_url}
 
 
+
+# ── BCE Recherche par nom ─────────────────────────────────────
+class BCESearchParser(HTMLParser):
+    """Parse les résultats de recherche par nom sur BCE Public Search."""
+    def __init__(self):
+        super().__init__()
+        self.results = []
+        self._in_table = False
+        self._in_row   = False
+        self._in_cell  = False
+        self._cells    = []
+        self._cell_buf = ""
+        self._row_link = ""
+        self._in_a     = False
+        self._a_href   = ""
+        self._depth    = 0
+
+    def handle_starttag(self, tag, attrs):
+        ad = dict(attrs)
+        if tag == "table":
+            cls = ad.get("class","").lower()
+            if "table" in cls or "result" in cls or "zoek" in cls:
+                self._in_table = True; self._depth = 1
+            elif self._in_table:
+                self._depth += 1
+        if self._in_table and tag == "tr":
+            self._in_row = True; self._cells = []; self._row_link = ""
+        if self._in_table and self._in_row and tag in ("td","th"):
+            self._in_cell = True; self._cell_buf = ""
+        if self._in_table and self._in_row and tag == "a":
+            self._in_a = True; self._a_href = ad.get("href","")
+
+    def handle_endtag(self, tag):
+        if tag == "table" and self._in_table:
+            self._depth -= 1
+            if self._depth <= 0: self._in_table = False
+        if self._in_table and self._in_row and tag in ("td","th"):
+            self._in_cell = False
+            self._cells.append((" ".join(self._cell_buf.split()), self._row_link))
+            self._row_link = ""
+        if self._in_table and tag == "tr" and self._in_row:
+            self._in_row = False
+            # Extraire numéro BCE et nom depuis les cellules
+            texts = [c[0] for c in self._cells]
+            links = [c[1] for c in self._cells]
+            # Chercher un numéro BCE (pattern 0XXX.XXX.XXX ou 10 chiffres)
+            bce = ""; nom = ""; statut = ""
+            for i, t in enumerate(texts):
+                m = re.search(r'(\d{4}\.\d{3}\.\d{3}|\d{10})', t)
+                if m:
+                    bce = m.group(1).replace(".","")
+                    # Le nom est souvent dans la cellule précédente ou suivante
+                    if i > 0 and texts[i-1] and not re.search(r'\d{4}', texts[i-1]):
+                        nom = texts[i-1]
+                    elif i < len(texts)-1 and texts[i+1]:
+                        nom = texts[i+1]
+                if "actif" in t.lower() or "actief" in t.lower():
+                    statut = "Actif"
+                elif "arrêt" in t.lower() or "gestopt" in t.lower():
+                    statut = "Arrêté"
+            # Fallback : toute la ligne comme nom si pas de numéro trouvé séparément
+            if bce and not nom:
+                nom = " — ".join(t for t in texts if t and not re.search(r'\d{4}\.\d{3}', t) and len(t) > 1)
+            if bce and len(bce) == 10:
+                self.results.append({
+                    "bce": bce,
+                    "nom": nom[:80] if nom else "",
+                    "statut": statut
+                })
+
+    def handle_data(self, s):
+        if self._in_cell:
+            self._cell_buf += s
+        if self._in_a and self._a_href:
+            self._row_link = self._a_href
+            self._in_a = False
+
+
+def search_bce_by_name(query):
+    """Recherche d'entreprises sur BCE Public Search par nom."""
+    # URL de recherche phonétique BCE (plus permissive)
+    query_enc = urllib.parse.quote(query.strip())
+    url = f"https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?naam={query_enc}&lang=fr&searchWord={query_enc}&_activeq=on&actionLu=Zoek"
+    
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "fr-FR,fr;q=0.95"
+        })
+        with urllib.request.urlopen(req, timeout=12) as r:
+            raw = r.read()
+        try:    html = gz.decompress(raw).decode("utf-8", errors="replace")
+        except: html = raw.decode("utf-8", errors="replace")
+
+        parser = BCESearchParser()
+        parser.feed(html)
+        results = parser.results
+
+        # Dédoublonner par BCE
+        seen = set()
+        unique = []
+        for r in results:
+            if r["bce"] not in seen:
+                seen.add(r["bce"])
+                unique.append(r)
+
+        # Si le parser n'a rien trouvé, essayer extraction regex directe
+        if not unique:
+            pattern = r'(\d{4}\.\d{3}\.\d{3})'
+            bces = re.findall(pattern, html)
+            for b in bces[:20]:
+                bce = b.replace(".","")
+                if bce not in seen and len(bce)==10:
+                    seen.add(bce)
+                    unique.append({"bce": bce, "nom": "", "statut": ""})
+
+        return {"ok": True, "results": unique[:25], "query": query}
+
+    except urllib.error.HTTPError as e:
+        return {"ok": False, "error": f"HTTP {e.code}", "results": []}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:100], "results": []}
+
 # ── Normalisation + check complet ────────────────────────────
 def normalize(raw):
     v=raw.strip().upper().replace(".","").replace(" ","").replace("-","")
@@ -513,8 +637,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             bce=normalize(p.get("bce",[""])[0])
             print(f"  /check BE{bce}")
             self._json(check_all(bce))
+        elif self.path.startswith("/search?"):
+            p=urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            q=p.get("q",[""])[0].strip()
+            if q:
+                print(f"  /search {q!r}")
+                self._json(search_bce_by_name(q))
+            else:
+                self._json({"ok":False,"error":"Paramètre q manquant","results":[]})
         elif self.path=="/health":
-            self._json({"status":"ok","version":"4.1"})
+            self._json({"status":"ok","version":"4.2"})
         else:
             self.send_response(404); self.end_headers()
 
