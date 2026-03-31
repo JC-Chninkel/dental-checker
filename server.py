@@ -546,6 +546,109 @@ class BCESearchParser(HTMLParser):
             self._in_a = False
 
 
+
+def _debug_search(query):
+    """Endpoint de debug — retourne le HTML brut + analyse pour diagnostiquer le parser."""
+    import traceback
+    results = {}
+
+    # ── Test POST phonétique ──────────────────────────────────
+    try:
+        post_data = urllib.parse.urlencode({
+            "searchWord": query, "_activeq": "on",
+            "actionLu": "Zoek", "lang": "fr"
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html",
+            data=post_data,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "fr-FR,fr;q=0.95",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            html = r.read().decode("utf-8", errors="replace")
+
+        # Analyse
+        bce_nums  = re.findall(r'\d{4}[.\s]\d{3}[.\s]\d{3}', html)
+        bce_links = re.findall(r'href="([^"]*zoeknummerform[^"]*nummer=\d+[^"]*)"', html, re.I)
+        tables    = re.findall(r'<table[^>]*class="([^"]*)"', html, re.I)
+        trs       = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.I)
+        # Extraire quelques lignes de tableau pour voir la structure
+        sample_rows = []
+        for tr in trs[:10]:
+            tds = re.findall(r'<td[^>]*>(.*?)</td>', tr, re.DOTALL | re.I)
+            clean = [re.sub(r'<[^>]+>', '', td).strip() for td in tds]
+            clean = [c for c in clean if c]
+            if clean:
+                sample_rows.append(clean)
+
+        results["post"] = {
+            "ok": True,
+            "html_length": len(html),
+            "bce_numbers_found": bce_nums[:10],
+            "bce_links_found": bce_links[:5],
+            "table_classes": tables[:5],
+            "sample_rows": sample_rows[:8],
+            "html_snippet": html[2000:4000]  # milieu du HTML souvent = résultats
+        }
+    except Exception as e:
+        results["post"] = {"ok": False, "error": str(e), "trace": traceback.format_exc()[-300:]}
+
+    # ── Test GET (certains serveurs acceptent les deux) ───────
+    try:
+        get_url = ("https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?"
+                   + urllib.parse.urlencode({"searchWord": query, "_activeq": "on",
+                                             "actionLu": "Zoek", "lang": "fr"}))
+        req2 = urllib.request.Request(get_url, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+            "Accept": "text/html",
+        })
+        with urllib.request.urlopen(req2, timeout=12) as r:
+            html2 = r.read().decode("utf-8", errors="replace")
+        bce2 = re.findall(r'\d{4}[.\s]\d{3}[.\s]\d{3}', html2)
+        results["get"] = {
+            "ok": True,
+            "html_length": len(html2),
+            "bce_numbers_found": bce2[:10],
+            "html_snippet": html2[2000:3500]
+        }
+    except Exception as e:
+        results["get"] = {"ok": False, "error": str(e)}
+
+    # ── Test version mobile ───────────────────────────────────
+    try:
+        mob_url = ("https://kbopub.economie.fgov.be/kbopub-m/zoeknamepage?"
+                   + urllib.parse.urlencode({"searchWord": query, "actief": "true", "lang": "fr"}))
+        req3 = urllib.request.Request(mob_url, headers={
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0)",
+            "Accept": "text/html",
+        })
+        with urllib.request.urlopen(req3, timeout=12) as r:
+            html3 = r.read().decode("utf-8", errors="replace")
+        bce3 = re.findall(r'\d{4}[.\s]\d{3}[.\s]\d{3}', html3)
+        trs3 = re.findall(r'<tr[^>]*>(.*?)</tr>', html3, re.DOTALL | re.I)
+        rows3 = []
+        for tr in trs3[:10]:
+            tds = re.findall(r'<td[^>]*>(.*?)</td>', tr, re.DOTALL | re.I)
+            clean = [re.sub(r'<[^>]+>', '', td).strip() for td in tds]
+            clean = [c for c in clean if c]
+            if clean: rows3.append(clean)
+        results["mobile"] = {
+            "ok": True,
+            "html_length": len(html3),
+            "bce_numbers_found": bce3[:10],
+            "sample_rows": rows3[:8],
+            "html_snippet": html3[:3000]
+        }
+    except Exception as e:
+        results["mobile"] = {"ok": False, "error": str(e)}
+
+    return {"query": query, "results": results}
+
 def search_bce_by_name(query):
     """
     Recherche par nom via BCE Public Search (POST form).
@@ -729,6 +832,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._json({"ok":False,"error":"Paramètre q manquant","results":[]})
         elif self.path=="/health":
             self._json({"status":"ok","version":"4.2"})
+        elif self.path.startswith("/debug-search?"):
+            p   = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            q   = p.get("q",["Henrion"])[0].strip()
+            self._json(_debug_search(q))
         else:
             self.send_response(404); self.end_headers()
 
