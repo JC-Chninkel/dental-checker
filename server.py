@@ -547,50 +547,132 @@ class BCESearchParser(HTMLParser):
 
 
 def search_bce_by_name(query):
-    """Recherche d'entreprises sur BCE Public Search par nom."""
-    # URL de recherche phonétique BCE (plus permissive)
-    query_enc = urllib.parse.quote(query.strip())
-    url = f"https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?naam={query_enc}&lang=fr&searchWord={query_enc}&_activeq=on&actionLu=Zoek"
-    
+    """
+    Recherche par nom via BCE Public Search (POST form).
+    Utilise aussi la version mobile en fallback — structure HTML plus simple.
+    """
+    results = []
+    query_clean = query.strip()
+
+    # ── Méthode 1 : POST vers le formulaire phonétique principal ──────
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "fr-FR,fr;q=0.95"
-        })
-        with urllib.request.urlopen(req, timeout=12) as r:
-            raw = r.read()
-        try:    html = gz.decompress(raw).decode("utf-8", errors="replace")
-        except: html = raw.decode("utf-8", errors="replace")
+        post_data = urllib.parse.urlencode({
+            "searchWord": query_clean,
+            "_activeq": "on",
+            "actionLu": "Zoek",
+            "lang": "fr"
+        }).encode("utf-8")
 
-        parser = BCESearchParser()
-        parser.feed(html)
-        results = parser.results
+        req = urllib.request.Request(
+            "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html",
+            data=post_data,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "fr-FR,fr;q=0.95",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            raw  = r.read()
+            html = raw.decode("utf-8", errors="replace")
 
-        # Dédoublonner par BCE
-        seen = set()
-        unique = []
-        for r in results:
-            if r["bce"] not in seen:
-                seen.add(r["bce"])
-                unique.append(r)
+        results = _parse_bce_search_results(html, query_clean)
 
-        # Si le parser n'a rien trouvé, essayer extraction regex directe
-        if not unique:
-            pattern = r'(\d{4}\.\d{3}\.\d{3})'
-            bces = re.findall(pattern, html)
-            for b in bces[:20]:
-                bce = b.replace(".","")
-                if bce not in seen and len(bce)==10:
-                    seen.add(bce)
-                    unique.append({"bce": bce, "nom": "", "statut": ""})
-
-        return {"ok": True, "results": unique[:25], "query": query}
-
-    except urllib.error.HTTPError as e:
-        return {"ok": False, "error": f"HTTP {e.code}", "results": []}
     except Exception as e:
-        return {"ok": False, "error": str(e)[:100], "results": []}
+        print(f"  BCE search POST error: {e}")
+
+    # ── Méthode 2 : version mobile (fallback, HTML plus simple) ───────
+    if not results:
+        try:
+            mob_url = "https://kbopub.economie.fgov.be/kbopub-m/zoeknamepage?" + urllib.parse.urlencode({
+                "searchWord": query_clean,
+                "actief": "true",
+                "lang": "fr"
+            })
+            req2 = urllib.request.Request(mob_url, headers={
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)",
+                "Accept": "text/html",
+                "Accept-Language": "fr-FR,fr;q=0.9"
+            })
+            with urllib.request.urlopen(req2, timeout=12) as r:
+                html2 = r.read().decode("utf-8", errors="replace")
+            results = _parse_bce_mobile_results(html2)
+        except Exception as e:
+            print(f"  BCE mobile search error: {e}")
+
+    # Dédoublonner
+    seen = set()
+    unique = []
+    for r in results:
+        if r["bce"] and r["bce"] not in seen and len(r["bce"]) == 10:
+            seen.add(r["bce"])
+            unique.append(r)
+
+    return {"ok": True, "results": unique[:30], "query": query_clean}
+
+
+def _parse_bce_search_results(html, query):
+    """Parse la page de résultats BCE Public Search standard."""
+    results = []
+    # Les résultats sont dans un tableau avec des liens vers les fiches
+    # Pattern : lien vers zoeknummerform avec le numéro, + nom dans le texte
+    
+    # Chercher tous les liens vers des fiches entreprise
+    link_pattern = re.compile(
+        r'href="[^"]*zoeknummerform[^"]*nummer=(\d+)[^"]*"[^>]*>([^<]+)</a>',
+        re.IGNORECASE
+    )
+    for m in link_pattern.finditer(html):
+        bce_raw = m.group(1).strip()
+        nom     = m.group(2).strip()
+        bce = bce_raw.replace(".", "")
+        if len(bce) == 10 and nom and len(nom) > 1:
+            # Déterminer le statut depuis le contexte autour du lien
+            ctx = html[max(0, m.start()-200):m.end()+200].lower()
+            if "actif" in ctx or "actief" in ctx:
+                statut = "Actif"
+            elif "arrêt" in ctx or "gestopt" in ctx or "stop" in ctx:
+                statut = "Arrêté"
+            else:
+                statut = ""
+            results.append({"bce": bce, "nom": nom[:80], "statut": statut})
+
+    # Fallback : regex sur les numéros BCE dans le HTML
+    if not results:
+        num_pattern = re.compile(r'(\d{4})\.(\d{3})\.(\d{3})')
+        for m in num_pattern.finditer(html):
+            bce = m.group(1) + m.group(2) + m.group(3)
+            # Chercher le nom autour
+            ctx   = html[max(0, m.start()-300):m.end()+300]
+            nom_m = re.search(r'<td[^>]*>\s*<a[^>]*>([^<]{3,60})</a>', ctx)
+            nom   = nom_m.group(1).strip() if nom_m else ""
+            results.append({"bce": bce, "nom": nom or f"Entreprise {bce}", "statut": ""})
+
+    return results
+
+
+def _parse_bce_mobile_results(html):
+    """Parse la version mobile BCE — HTML plus simple et structuré."""
+    results = []
+    # La version mobile utilise des li ou div avec classe "listitem" ou similaire
+    # Pattern commun : numéro + nom + statut
+    
+    # Chercher les entrées de liste
+    item_pattern = re.compile(
+        r'(\d{4}[\. ]\d{3}[\. ]\d{3})[^\w]*([A-Za-z][^<]{2,60})',
+        re.UNICODE
+    )
+    for m in item_pattern.finditer(html):
+        bce = re.sub(r'[^\d]', '', m.group(1))
+        nom = m.group(2).strip().rstrip(" -|/")
+        if len(bce) == 10 and nom and len(nom) > 2:
+            ctx    = html[max(0, m.start()-100):m.end()+100].lower()
+            statut = "Actif" if "actif" in ctx else "Arrêté" if "arrêt" in ctx else ""
+            results.append({"bce": bce, "nom": nom[:80], "statut": statut})
+
+    return results
 
 # ── Normalisation + check complet ────────────────────────────
 def normalize(raw):
