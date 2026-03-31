@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: dental-addict-checker
+    env: python
+    buildCommand: echo "No build needed"
+    startCommand: python server.py
+    plan: free
+    envVars:
+      - key: PORT
+        value: 10000

@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VIES + BCE + PEPPOL — Dental Addict</title>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:'Segoe UI',Arial,sans-serif; background:#f0f2f5; min-height:100vh; padding:24px 16px; color:#1a1a2e; }
+.app { max-width:960px; margin:0 auto; }
+
+.logo-bar { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
+.logo-icon { width:42px; height:42px; background:#003087; border-radius:10px; display:flex; align-items:center; justify-content:center; color:white; font-size:20px; font-weight:700; }
+.logo-text h1 { font-size:20px; font-weight:700; color:#003087; }
+.logo-text p  { font-size:12px; color:#6b7280; margin-top:1px; }
+
+.sources { display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; }
+.src { display:inline-flex; align-items:center; gap:5px; padding:4px 12px; border-radius:99px; font-size:11px; font-weight:700; }
+.s-vies   { background:#dbeafe; color:#1d4ed8; }
+.s-bce    { background:#ede9fe; color:#6d28d9; }
+.s-peppol { background:#dcfce7; color:#166534; }
+
+.card { background:white; border-radius:14px; box-shadow:0 2px 12px rgba(0,0,0,0.07); padding:22px; margin-bottom:18px; }
+
+.tabs { display:flex; gap:4px; background:#f0f2f5; border-radius:10px; padding:4px; margin-bottom:20px; }
+.tab { flex:1; padding:8px 0; text-align:center; font-size:13px; font-weight:600; cursor:pointer; border-radius:8px; border:none; background:transparent; color:#6b7280; transition:all .15s; }
+.tab.active { background:white; color:#003087; box-shadow:0 1px 4px rgba(0,0,0,0.1); }
+
+label { font-size:12px; font-weight:600; color:#374151; display:block; margin-bottom:6px; }
+.input-row { display:flex; gap:8px; align-items:center; }
+.prefix { background:#e8edf5; color:#003087; font-weight:700; font-size:15px; padding:0 14px; height:44px; border-radius:8px; display:flex; align-items:center; }
+input[type=text] { flex:1; height:44px; padding:0 14px; border:1.5px solid #d1d5db; border-radius:8px; font-size:16px; font-family:'Courier New',monospace; outline:none; transition:border .15s; }
+input[type=text]:focus { border-color:#003087; }
+textarea { width:100%; padding:10px; min-height:120px; border:1.5px solid #d1d5db; border-radius:8px; font-family:'Courier New',monospace; font-size:13px; resize:vertical; outline:none; line-height:1.9; }
+textarea:focus { border-color:#003087; }
+.hint { font-size:11px; color:#9ca3af; margin-top:5px; }
+
+.btn { height:44px; padding:0 20px; border-radius:8px; border:none; cursor:pointer; font-size:13px; font-weight:700; transition:all .15s; white-space:nowrap; }
+.btn-p { background:#003087; color:white; }
+.btn-p:hover:not(:disabled) { background:#002060; }
+.btn-p:disabled { background:#9ca3af; cursor:not-allowed; }
+.btn-s { background:#f0f2f5; color:#374151; border:1.5px solid #d1d5db; }
+.btn-s:hover:not(:disabled) { background:#e5e7eb; }
+.btn-s:disabled { opacity:.4; cursor:not-allowed; }
+.btn-row { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+
+.prog-wrap { height:5px; background:#e5e7eb; border-radius:99px; overflow:hidden; margin:10px 0; display:none; }
+.prog-bar  { height:100%; background:#003087; border-radius:99px; transition:width .3s; width:0; }
+.prog-lbl  { font-size:11px; color:#6b7280; text-align:center; margin-bottom:4px; display:none; }
+
+/* Result card */
+.rc { background:white; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:10px; overflow:hidden; animation:fadeUp .15s ease; }
+@keyframes fadeUp { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+.rc-head { display:flex; align-items:flex-start; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #f3f4f6; gap:8px; flex-wrap:wrap; }
+.rc-num  { font-family:'Courier New',monospace; font-size:15px; font-weight:700; }
+.rc-nom  { font-size:12px; color:#374151; font-weight:600; margin-top:2px; }
+.pills { display:flex; gap:6px; flex-wrap:wrap; }
+.pill { display:inline-flex; align-items:center; gap:3px; padding:2px 9px; border-radius:99px; font-size:10px; font-weight:700; }
+.p-ok  { background:#dcfce7; color:#166534; }
+.p-ko  { background:#fee2e2; color:#991b1b; }
+.p-warn{ background:#fef9c3; color:#854d0e; }
+.p-info{ background:#dbeafe; color:#1d4ed8; }
+.p-pp  { background:#dcfce7; color:#166534; }
+.p-npp { background:#f3f4f6; color:#6b7280; }
+
+/* 3-column grid */
+.rc-cols { display:grid; grid-template-columns:1fr 1fr 1fr; }
+@media(max-width:640px){ .rc-cols{grid-template-columns:1fr;} }
+.rc-col { padding:10px 14px; font-size:12px; }
+.rc-col:not(:last-child) { border-right:1px solid #f3f4f6; }
+.col-ttl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; margin-bottom:7px; }
+.ct-v { color:#1d4ed8; } .ct-b { color:#6d28d9; } .ct-p { color:#166534; }
+.ir { display:flex; gap:6px; margin-bottom:4px; }
+.ir-l { color:#9ca3af; min-width:72px; flex-shrink:0; }
+.ir-v { color:#374151; word-break:break-word; }
+.ir-ok  { color:#166534; font-weight:600; }
+.ir-ko  { color:#991b1b; font-weight:600; }
+.ir-hi  { color:#1d4ed8; font-weight:600; }
+.ir-pp  { color:#166534; font-weight:600; font-family:'Courier New',monospace; font-size:11px; }
+.ir-warn{ color:#854d0e; }
+
+.rc-foot { padding:7px 16px; background:#f9fafb; border-top:1px solid #f3f4f6; display:flex; gap:12px; flex-wrap:wrap; }
+.rc-foot a { font-size:11px; color:#003087; text-decoration:none; }
+.rc-foot a:hover { text-decoration:underline; }
+
+.load-card { background:white; border:1px solid #e5e7eb; border-radius:12px; padding:12px 16px; margin-bottom:10px; display:flex; align-items:center; gap:10px; }
+.spinner { width:15px; height:15px; border:2px solid #e5e7eb; border-top-color:#003087; border-radius:50%; animation:spin .7s linear infinite; flex-shrink:0; }
+@keyframes spin { to{transform:rotate(360deg)} }
+.spin-txt { font-size:12px; color:#6b7280; }
+
+.sum-bar { display:flex; gap:8px; flex-wrap:wrap; padding:10px 14px; background:#f8f9fa; border-radius:10px; margin-bottom:12px; }
+.s-chip  { padding:3px 12px; border-radius:99px; font-size:11px; font-weight:700; }
+
+.footer { text-align:center; font-size:11px; color:#9ca3af; margin-top:14px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="logo-bar">
+    <div class="logo-icon">D</div>
+    <div class="logo-text">
+      <h1>VIES + BCE + PEPPOL Checker</h1>
+      <p>Dental Addict — Vérification croisée clients belges</p>
+    </div>
+  </div>
+
+  <div class="sources">
+    <span class="src s-vies">● VIES — Statut TVA (Commission EU)</span>
+    <span class="src s-bce">● BCE — Entreprise + NACE + Type entité (SPF Économie)</span>
+    <span class="src s-peppol">● PEPPOL — e-Facturation (SMP Belgium)</span>
+  </div>
+
+  <div class="card">
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('single')">🔍 Unitaire</button>
+      <button class="tab" onclick="switchTab('batch')">📋 En lot</button>
+    </div>
+
+    <!-- SINGLE -->
+    <div id="pane-single">
+      <label>Numéro BCE / TVA belge</label>
+      <div class="input-row">
+        <div class="prefix">BE</div>
+        <input type="text" id="inp" placeholder="0553975413" maxlength="14"
+          oninput="fmt(this)" onkeydown="if(event.key==='Enter')goSingle()" />
+        <button class="btn btn-p" id="btn1" onclick="goSingle()">Vérifier</button>
+      </div>
+      <p class="hint">VIES + BCE + PEPPOL en parallèle</p>
+      <div id="res-single" style="margin-top:14px"></div>
+    </div>
+
+    <!-- BATCH -->
+    <div id="pane-batch" style="display:none">
+      <label>Numéros BCE — un par ligne</label>
+      <textarea id="inp-batch" placeholder="0553975413&#10;0662985694&#10;BE0123456789"></textarea>
+      <p class="hint">Formats : 10 chiffres, avec points, ou préfixe BE</p>
+      <div class="prog-lbl" id="prog-lbl"></div>
+      <div class="prog-wrap" id="prog-wrap"><div class="prog-bar" id="prog-bar"></div></div>
+      <div class="btn-row">
+        <button class="btn btn-p" id="btn-batch" onclick="goBatch()">▶ Vérifier tout</button>
+        <button class="btn btn-s" id="btn-csv" style="display:none" onclick="exportCSV()">⬇ CSV complet</button>
+        <button class="btn btn-s" onclick="clearAll()">✕ Effacer</button>
+      </div>
+      <div id="res-batch" style="margin-top:18px"></div>
+    </div>
+  </div>
+
+  <div class="footer">VIES (Commission EU) · BCE Public Search (SPF Économie) · SMP Belgium (PEPPOL) · Dental Addict SRL</div>
+</div>
+
+<script>
+// Auto-detect API base (local ou online)
+const API = window.location.origin;
+let batchResults = [];
+
+function fmt(el) {
+  let v = el.value.replace(/[\.\s]/g,'').toUpperCase();
+  if(v.startsWith('BE')) v=v.slice(2);
+  v=v.replace(/\D/g,'').slice(0,10); el.value=v;
+}
+function norm(r) {
+  let v=r.toString().trim().toUpperCase().replace(/[\.\s\-]/g,'');
+  if(v.startsWith('BE')) v=v.slice(2);
+  v=v.replace(/\D/g,'');
+  if(v.length===9) v='0'+v; return v;
+}
+function switchTab(t) {
+  document.getElementById('pane-single').style.display=t==='single'?'block':'none';
+  document.getElementById('pane-batch').style.display=t==='batch'?'block':'none';
+  document.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('active',(i===0&&t==='single')||(i===1&&t==='batch')));
+}
+
+function renderCard(item) {
+  const {bce,vies,bceData,peppol} = item;
+
+  // Pills header
+  let vp='',vpc=''; 
+  if(!vies?.ok){vp='⚠ VIES erreur';vpc='p-warn';}
+  else if(vies.valid){vp='✓ VIES assujetti';vpc='p-ok';}
+  else{vp='✗ VIES non assujetti';vpc='p-ko';}
+
+  let bp='',bpc='';
+  if(!bceData?.ok){bp='⚠ BCE erreur';bpc='p-warn';}
+  else if(bceData.found){bp='✓ BCE active';bpc='p-ok';}
+  else{bp='✗ BCE introuvable';bpc='p-ko';}
+
+  let pp='',ppc='';
+  if(!peppol?.ok){pp='⚠ PEPPOL erreur';ppc='p-warn';}
+  else if(peppol.registered){pp='✓ PEPPOL inscrit';ppc='p-pp';}
+  else{pp='○ PEPPOL non inscrit';ppc='p-npp';}
+
+  const nom = (vies?.ok&&vies.name)||(bceData?.ok&&bceData.nom)||'';
+
+  // VIES col
+  let vrows='';
+  if(!vies?.ok) vrows=`<div class="ir"><span class="ir-v ir-warn">${vies?.error||'?'}</span></div>`;
+  else {
+    vrows=`<div class="ir"><span class="ir-l">Statut</span><span class="ir-v ${vies.valid?'ir-ok':'ir-ko'}">${vies.valid?'Assujetti actif':'Non assujetti'}</span></div>`;
+    if(vies.name)    vrows+=`<div class="ir"><span class="ir-l">Nom</span><span class="ir-v">${vies.name}</span></div>`;
+    if(vies.address) vrows+=`<div class="ir"><span class="ir-l">Adresse</span><span class="ir-v">${vies.address}</span></div>`;
+    if(vies.error)   vrows+=`<div class="ir"><span class="ir-l">Détail</span><span class="ir-v ir-warn">${vies.error}</span></div>`;
+  }
+
+  // BCE col
+  let brows='';
+  if(!bceData?.ok) brows=`<div class="ir"><span class="ir-v ir-warn">${bceData?.error||'?'}</span></div>`;
+  else {
+    brows=`<div class="ir"><span class="ir-l">Statut</span><span class="ir-v ${bceData.found?'ir-ok':'ir-ko'}">${bceData.found?'Active':'Introuvable'}</span></div>`;
+    if(bceData.nom)      brows+=`<div class="ir"><span class="ir-l">Nom</span><span class="ir-v">${bceData.nom}</span></div>`;
+    if(bceData.type_entite) brows+=`<div class="ir"><span class="ir-l">Type entité</span><span class="ir-v ir-hi">${bceData.type_entite}</span></div>`;
+    if(bceData.forme)    brows+=`<div class="ir"><span class="ir-l">Forme jur.</span><span class="ir-v">${bceData.forme}</span></div>`;
+    if(bceData.debut)    brows+=`<div class="ir"><span class="ir-l">Début</span><span class="ir-v">${bceData.debut}</span></div>`;
+    if(bceData.situation)brows+=`<div class="ir"><span class="ir-l">Situation</span><span class="ir-v">${bceData.situation}</span></div>`;
+    if(bceData.nace_code)brows+=`<div class="ir"><span class="ir-l">NACE</span><span class="ir-v ir-hi">${bceData.nace_code} — ${bceData.nace_libelle}</span></div>`;
+  }
+
+  // PEPPOL col
+  let prows='';
+  if(!peppol?.ok) prows=`<div class="ir"><span class="ir-v ir-warn">${peppol?.error||'?'}</span></div>`;
+  else if(!peppol.registered) {
+    prows=`<div class="ir"><span class="ir-l">Statut</span><span class="ir-v" style="color:#6b7280">Non inscrit sur PEPPOL</span></div>
+           <div class="ir"><span class="ir-l">Impact</span><span class="ir-v ir-warn">e-Facturation impossible</span></div>`;
+  } else {
+    prows=`<div class="ir"><span class="ir-l">Statut</span><span class="ir-v ir-ok">Inscrit ✓</span></div>
+           <div class="ir"><span class="ir-l">ID PEPPOL</span><span class="ir-pp">${peppol.peppol_id||'0208:'+bce}</span></div>`;
+    if(peppol.doc_types?.length) prows+=`<div class="ir"><span class="ir-l">Documents</span><span class="ir-v">${peppol.doc_types.join(', ')}</span></div>`;
+    if(peppol.source) prows+=`<div class="ir"><span class="ir-l">Source</span><span class="ir-v" style="color:#9ca3af">${peppol.source}</span></div>`;
+  }
+
+  return `<div class="rc">
+    <div class="rc-head">
+      <div>
+        <div class="rc-num">BE${bce}</div>
+        ${nom?`<div class="rc-nom">${nom}</div>`:''}
+      </div>
+      <div class="pills">
+        <span class="pill ${vpc}">${vp}</span>
+        <span class="pill ${bpc}">${bp}</span>
+        <span class="pill ${ppc}">${pp}</span>
+      </div>
+    </div>
+    <div class="rc-cols">
+      <div class="rc-col"><div class="col-ttl ct-v">● VIES</div>${vrows}</div>
+      <div class="rc-col"><div class="col-ttl ct-b">● BCE</div>${brows}</div>
+      <div class="rc-col"><div class="col-ttl ct-p">● PEPPOL</div>${prows}</div>
+    </div>
+    <div class="rc-foot">
+      <a href="https://ec.europa.eu/taxation_customs/vies/#/vat-validation" target="_blank">VIES ↗</a>
+      <a href="https://kbopub.economie.fgov.be/kbopub/zoeknummerform.html?nummer=${bce}&lang=fr" target="_blank">BCE ↗</a>
+      <a href="http://smp.belgium.be/${encodeURIComponent('iso6523-actorid-upis::0208:'+bce)}" target="_blank">SMP PEPPOL ↗</a>
+    </div>
+  </div>`;
+}
+
+async function goSingle() {
+  const bce=norm(document.getElementById('inp').value);
+  const zone=document.getElementById('res-single');
+  const btn=document.getElementById('btn1');
+  if(bce.length!==10){zone.innerHTML='<div class="rc" style="padding:12px 16px"><span style="color:#991b1b;font-weight:600">Format invalide — 10 chiffres requis</span></div>';return;}
+  btn.disabled=true; btn.textContent='...';
+  zone.innerHTML=`<div class="load-card"><div class="spinner"></div><div class="spin-txt">VIES + BCE + PEPPOL en parallèle — BE${bce}…</div></div>`;
+  try {
+    const r=await fetch(`${API}/check?bce=${bce}`);
+    const data=await r.json();
+    zone.innerHTML=renderCard(data);
+  } catch(e) {
+    zone.innerHTML=`<div class="rc" style="padding:12px 16px"><span style="color:#991b1b">Erreur : ${e.message}</span></div>`;
+  }
+  btn.disabled=false; btn.textContent='Vérifier';
+}
+
+async function goBatch() {
+  const lines=document.getElementById('inp-batch').value.split('\n').map(l=>l.trim()).filter(Boolean);
+  if(!lines.length) return;
+  const btn=document.getElementById('btn-batch');
+  const zone=document.getElementById('res-batch');
+  const pw=document.getElementById('prog-wrap');
+  const pb=document.getElementById('prog-bar');
+  const pl=document.getElementById('prog-lbl');
+  btn.disabled=true; document.getElementById('btn-csv').style.display='none';
+  zone.innerHTML=''; batchResults=[]; pw.style.display='block'; pl.style.display='block';
+  pb.style.width='0';
+
+  const est=Math.ceil(lines.length*0.4/4/60);
+  const wc=document.createElement('div');
+  wc.className='load-card'; wc.id='wait-card';
+  wc.innerHTML=`<div class="spinner"></div><div class="spin-txt"><strong>${lines.length} numéros envoyés…</strong><br><span style="font-size:11px;color:#6b7280">Estimé : ${est}-${est+3} min — VIES + BCE + PEPPOL en parallèle</span></div>`;
+  zone.appendChild(wc); pl.textContent='Traitement serveur en cours…';
+
+  let all;
+  try {
+    const r=await fetch(API+'/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({numbers:lines})});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    all=await r.json();
+  } catch(e) {
+    zone.innerHTML=`<div class="rc" style="padding:12px 16px;color:#991b1b">Erreur : ${e.message}</div>`;
+    btn.disabled=false; pw.style.display='none'; pl.style.display='none'; return;
+  }
+
+  zone.innerHTML=''; batchResults=[];
+  for(let i=0;i<all.length;i++){
+    batchResults.push(all[i]);
+    const tmp=document.createElement('div'); tmp.innerHTML=renderCard(all[i]);
+    zone.appendChild(tmp.firstChild);
+    pb.style.width=Math.round((i+1)/all.length*100)+'%';
+    if(i%15===0) await new Promise(r=>setTimeout(r,0));
+  }
+
+  const vOk=batchResults.filter(r=>r.vies?.ok&&r.vies?.valid).length;
+  const vKo=batchResults.filter(r=>r.vies?.ok&&!r.vies?.valid).length;
+  const bOk=batchResults.filter(r=>r.bceData?.ok&&r.bceData?.found).length;
+  const pOk=batchResults.filter(r=>r.peppol?.ok&&r.peppol?.registered).length;
+  const sum=document.createElement('div');
+  sum.className='sum-bar';
+  sum.innerHTML=`
+    <span class="s-chip" style="background:#dcfce7;color:#166534">VIES ✓ ${vOk} assujetti(s)</span>
+    <span class="s-chip" style="background:#fee2e2;color:#991b1b">VIES ✗ ${vKo} non assujetti(s)</span>
+    <span class="s-chip" style="background:#ede9fe;color:#6d28d9">BCE ✓ ${bOk}/${batchResults.length}</span>
+    <span class="s-chip" style="background:#dcfce7;color:#166534">PEPPOL ✓ ${pOk} inscrit(s)</span>`;
+  zone.insertBefore(sum,zone.firstChild);
+  document.getElementById('btn-csv').style.display='inline-block';
+  pw.style.display='none'; pl.style.display='none'; btn.disabled=false;
+}
+
+function exportCSV() {
+  if(!batchResults.length) return;
+  const S=';', BOM='\uFEFF';
+  const today=new Date().toISOString().split('T')[0];
+  const hdr=[
+    'Numéro TVA','VIES Statut','VIES Dénomination','VIES Adresse',
+    'BCE Active','BCE Dénomination','BCE Type Entité','BCE Forme Juridique',
+    'BCE Début Activité','BCE Situation Juridique','NACE Code','NACE Activité',
+    'PEPPOL Inscrit','PEPPOL ID','PEPPOL Documents acceptés','Date'
+  ].join(S);
+  const rows=batchResults.map(({bce,vies,bceData,peppol})=>{
+    const vs=!vies?.ok?`Erreur:${vies?.error}`:vies.valid?'Assujetti actif':'Non assujetti';
+    const bs=!bceData?.ok?`Erreur:${bceData?.error}`:bceData.found?'Oui':'Non';
+    const ps=!peppol?.ok?`Erreur:${peppol?.error}`:peppol.registered?'Oui':'Non';
+    return [
+      e(`BE${bce}`),e(vs),e(vies?.name||''),e(vies?.address||''),
+      e(bs),e(bceData?.nom||''),e(bceData?.type_entite||''),e(bceData?.forme||''),
+      e(bceData?.debut||''),e(bceData?.situation||''),
+      e(bceData?.nace_code||''),e(bceData?.nace_libelle||''),
+      e(ps),e(peppol?.peppol_id||''),e((peppol?.doc_types||[]).join(', ')),
+      e(today)
+    ].join(S);
+  });
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([BOM+hdr+'\n'+rows.join('\n')],{type:'text/csv;charset=utf-8'}));
+  a.download=`dental_addict_checker_${today}.csv`; a.click();
+}
+function e(v){const s=(v||'').toString().replace(/"/g,'""');return(s.includes(';')||s.includes('"')||s.includes('\n'))?`"${s}"`:s;}
+function clearAll(){document.getElementById('inp-batch').value='';document.getElementById('res-batch').innerHTML='';document.getElementById('btn-csv').style.display='none';batchResults=[];}
+</script>
+</body>
+</html>
