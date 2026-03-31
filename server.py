@@ -650,309 +650,52 @@ def _debug_search(query):
 
     # ── Test 4 : two-step avec cookie de session ─────────────
     try:
-        import http.cookiejar
-        cj  = http.cookiejar.CookieJar()
+        import http.cookiejar, re as _re
+        cj     = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+        hdrs   = {"User-Agent": "Mozilla/5.0", "Accept": "text/html", "Accept-Language": "fr-FR,fr;q=0.9"}
 
-        # Étape 1 : charger le formulaire pour obtenir le cookie de session
-        r1 = opener.open("https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr", timeout=10)
-        html_form = r1.read().decode("utf-8", errors="replace")
+        # Étape 1 : charger le formulaire → cookies
+        opener.open(urllib.request.Request(
+            "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr",
+            headers=hdrs), timeout=10).read()
 
-        # Extraire le token CSRF / hidden fields si présents
-        import re as _re
-        hidden = _re.findall('<input[^>]+name=[^>]*>', html_form, _re.I)
-        # Aussi extraire l'action du formulaire
-        form_action = _re.search('<form[^>]+action=.([^"\' >]+)', html_form, _re.I)
+        cookies_sent = [c.name + "=" + c.value[:15] for c in cj]
 
-        results["session_info"] = {
-            "cookies": [{"name": c.name, "value": c.value[:20]} for c in cj],
-            "hidden_fields": hidden[:5],
-            "form_action": form_action.group(1) if form_action else None,
-            "form_snippet": html_form[html_form.find("<form"):html_form.find("<form")+400] if "<form" in html_form else "no form found"
-        }
-
-        # Étape 2 : soumettre avec le cookie
-        post_data2 = {"searchWord": query, "_activeq": "on", "actionLu": "Zoek", "lang": "fr"}
-        # hidden est une liste de strings HTML — extraire name/value manuellement
-        for h in hidden:
-            nm = _re.search(r'name=["\'](\w+)["\'"]', h)
-            vl = _re.search(r'value=["\'"]([^"\']*)["\'"]', h)
-            if nm and vl and nm.group(1) not in ("searchWord",):
-                post_data2[nm.group(1)] = vl.group(1)
-
-        encoded = urllib.parse.urlencode(post_data2).encode("utf-8")
-        req2 = urllib.request.Request(
-            form_action.group(1) if form_action and form_action.group(1).startswith("http")
-            else "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html",
-            data=encoded,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "fr-FR,fr;q=0.95",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Referer": "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr"
-            }
-        )
-        r2 = opener.open(req2, timeout=15)
+        # Étape 2 : GET avec cookies + searchWord
+        url2 = ("https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?"
+                + urllib.parse.urlencode({
+                    "searchWord": query, "_activeq": "on",
+                    "actionLu": "Zoek", "lang": "fr"
+                }))
+        r2   = opener.open(urllib.request.Request(url2, headers={
+            **hdrs,
+            "Referer": "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr"
+        }), timeout=15)
         html2 = r2.read().decode("utf-8", errors="replace")
 
-        bces2  = _re.findall(r'\d{4}[.\s]\d{3}[.\s]\d{3}', html2)
+        bces2  = _re.findall(r"\d{4}\.\d{3}\.\d{3}", html2)
         links2 = _re.findall(r'href="([^"]*zoeknummerform[^"]*)"', html2, _re.I)
+
         # Extraire les lignes de tableau
-        trs2 = _re.findall(r'<tr[^>]*>(.*?)</tr>', html2, _re.DOTALL | _re.I)
         rows2 = []
-        for tr in trs2[:15]:
-            tds = _re.findall(r'<td[^>]*>(.*?)</td>', tr, _re.DOTALL | _re.I)
-            clean = [_re.sub(r'<[^>]+>', '', td).strip() for td in tds]
+        for tr in _re.findall(r"<tr[^>]*>(.*?)</tr>", html2, _re.DOTALL | _re.I)[:20]:
+            tds = _re.findall(r"<td[^>]*>(.*?)</td>", tr, _re.DOTALL | _re.I)
+            clean = [_re.sub(r"<[^>]+>", "", td).strip() for td in tds]
             clean = [c for c in clean if c and len(c) > 1]
             if clean: rows2.append(clean)
 
         results["two_step"] = {
             "ok": True,
+            "cookies_sent": cookies_sent,
             "html_length": len(html2),
             "bce_numbers": bces2[:10],
             "links": links2[:5],
             "rows": rows2[:10],
-            "snippet_middle": html2[3000:5000]
+            "snippet_2000_4000": html2[2000:4000]
         }
-
     except Exception as e:
         import traceback
-        results["two_step"] = {"ok": False, "error": str(e), "trace": traceback.format_exc()[-400:]}
+        results["two_step"] = {"ok": False, "error": str(e), "trace": traceback.format_exc()[-300:]}
 
     return {"query": query, "results": results}
-
-def search_bce_by_name(query):
-    """Recherche BCE par nom — GET avec cookies de session."""
-    import http.cookiejar
-    query_clean = query.strip()
-
-    cj     = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-    hdrs   = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "fr-FR,fr;q=0.95",
-    }
-
-    try:
-        # Étape 1 — récupérer les cookies de session
-        opener.open(urllib.request.Request(
-            "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr",
-            headers=hdrs), timeout=10).read()
-
-        # Étape 2 — soumettre la recherche GET avec les cookies
-        url = ("https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?"
-               + urllib.parse.urlencode({
-                   "searchWord": query_clean,
-                   "_activeq":   "on",
-                   "actionLu":   "Zoek",
-                   "lang":       "fr"
-               }))
-        r = opener.open(urllib.request.Request(url, headers={
-            **hdrs,
-            "Referer": "https://kbopub.economie.fgov.be/kbopub/zoeknaamfonetischform.html?lang=fr"
-        }), timeout=15)
-        html = r.read().decode("utf-8", errors="replace")
-
-        results = _parse_bce_search_results(html)
-
-        seen, unique = set(), []
-        for item in results:
-            if item["bce"] not in seen and len(item["bce"]) == 10:
-                seen.add(item["bce"]); unique.append(item)
-
-        return {"ok": True, "results": unique[:30], "query": query_clean}
-
-    except Exception as e:
-        return {"ok": False, "error": str(e)[:120], "results": [], "query": query_clean}
-
-
-def _parse_bce_search_results(html):
-    """
-    Parse les résultats BCE Public Search.
-    Structure connue : liens <a href="/kbopub/zoeknummerform.html?nummer=XXXXXXXXXX&lang=fr">Nom</a>
-    dans un tableau de résultats.
-    """
-    results = []
-
-    # Pattern principal — liens vers les fiches entreprise avec numéro BCE
-    link_re = re.compile(
-        r'href=["\'](/kbopub/zoeknummerform\.html\?[^"\']*nummer=(\d+)[^"\']*)["\'"][^>]*>'
-        r'([^<]{2,80})</a>',
-        re.IGNORECASE
-    )
-    for m in link_re.finditer(html):
-        bce = m.group(2).strip()
-        nom = re.sub(r'\s+', ' ', m.group(3)).strip()
-        # Ignorer les noms parasites (navigation, etc.)
-        if (len(bce) == 10
-                and nom
-                and len(nom) > 1
-                and nom.lower() not in ("accueil","contact","disclaimer","nouveautés")):
-            ctx    = html[max(0, m.start()-400):m.end()+200].lower()
-            statut = ("Actif"   if "actif"   in ctx or "actief"     in ctx else
-                      "Arrêté" if "arrêt"   in ctx or "beëindigd"  in ctx or "gestopt" in ctx
-                      else "")
-            results.append({"bce": bce, "nom": nom[:80], "statut": statut})
-
-    # Fallback — regex sur numéros formatés 0XXX.XXX.XXX dans le HTML
-    if not results:
-        for m in re.finditer(r'(\d{4})\.(\d{3})\.(\d{3})', html):
-            bce = m.group(1) + m.group(2) + m.group(3)
-            # Chercher un nom dans le voisinage du numéro
-            snippet = html[max(0, m.start()-200):m.end()+200]
-            nom_m   = re.search(r'>([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\s\-\.]{3,60})<', snippet)
-            nom     = nom_m.group(1).strip() if nom_m else ""
-            results.append({"bce": bce, "nom": nom, "statut": ""})
-
-    return results
-
-
-def _parse_bce_mobile_results(html):
-    """Parse la version mobile BCE — HTML plus simple et structuré."""
-    results = []
-    # La version mobile utilise des li ou div avec classe "listitem" ou similaire
-    # Pattern commun : numéro + nom + statut
-    
-    # Chercher les entrées de liste
-    item_pattern = re.compile(
-        r'(\d{4}[\. ]\d{3}[\. ]\d{3})[^\w]*([A-Za-z][^<]{2,60})',
-        re.UNICODE
-    )
-    for m in item_pattern.finditer(html):
-        bce = re.sub(r'[^\d]', '', m.group(1))
-        nom = m.group(2).strip().rstrip(" -|/")
-        if len(bce) == 10 and nom and len(nom) > 2:
-            ctx    = html[max(0, m.start()-100):m.end()+100].lower()
-            statut = "Actif" if "actif" in ctx else "Arrêté" if "arrêt" in ctx else ""
-            results.append({"bce": bce, "nom": nom[:80], "statut": statut})
-
-    return results
-
-# ── Normalisation + check complet ────────────────────────────
-def normalize(raw):
-    v=raw.strip().upper().replace(".","").replace(" ","").replace("-","")
-    if v.startswith("BE"): v=v[2:]
-    v="".join(c for c in v if c.isdigit())
-    if len(v)==9: v="0"+v
-    return v
-
-def check_all(bce):
-    if len(bce)!=10:
-        e={"ok":False,"error":"Format invalide (≠10 chiffres)"}
-        return {"bce":bce,"vies":e,"bceData":e,"peppol":e}
-    res={}
-    def dv():
-        with _vies_sem: res["vies"]=check_vies(bce)
-    def db():
-        with _bce_sem:  res["bce"] =check_bce(bce)
-    def dp():
-        with _peppol_sem: res["peppol"]=check_peppol(bce)
-    ts=[threading.Thread(target=f) for f in (dv,db,dp)]
-    for t in ts: t.start()
-    for t in ts: t.join()
-    return {"bce":bce,"vies":res.get("vies"),"bceData":res.get("bce"),"peppol":res.get("peppol")}
-
-
-# ── HTTP Handler ──────────────────────────────────────────────
-class Handler(http.server.BaseHTTPRequestHandler):
-    def log_message(self,fmt,*a): pass
-
-    def do_OPTIONS(self):
-        self.send_response(200); self._cors(); self.end_headers()
-
-    def _cors(self):
-        self.send_header("Access-Control-Allow-Origin","*")
-        self.send_header("Access-Control-Allow-Methods","GET,POST,OPTIONS")
-        self.send_header("Access-Control-Allow-Headers","Content-Type")
-
-    def do_GET(self):
-        if self.path in ("/","/index.html"):
-            self._serve_html()
-        elif self.path.startswith("/check?"):
-            p=urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            bce=normalize(p.get("bce",[""])[0])
-            print(f"  /check BE{bce}")
-            self._json(check_all(bce))
-        elif self.path.startswith("/search?"):
-            p=urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            q=p.get("q",[""])[0].strip()
-            if q:
-                print(f"  /search {q!r}")
-                self._json(search_bce_by_name(q))
-            else:
-                self._json({"ok":False,"error":"Paramètre q manquant","results":[]})
-        elif self.path=="/health":
-            self._json({"status":"ok","version":"4.2"})
-        elif self.path.startswith("/debug-search?"):
-            p   = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            q   = p.get("q",["Henrion"])[0].strip()
-            self._json(_debug_search(q))
-        else:
-            self.send_response(404); self.end_headers()
-
-    def do_POST(self):
-        if self.path!="/batch": return
-        body=json.loads(self.rfile.read(int(self.headers.get("Content-Length",0))).decode())
-        numbers=body.get("numbers",[])
-        total=len(numbers)
-        print(f"\n  Batch {total} nums — VIES×{VIES_WORKERS} BCE×{BCE_WORKERS} PEPPOL×4")
-        results=[None]*total
-        lock=threading.Lock(); done=[0]
-        def process(idx,raw):
-            bce=normalize(raw); r=check_all(bce)
-            with lock:
-                results[idx]=r; done[0]+=1
-                pct=done[0]*100//total
-                print(f"\r  [{'='*(pct//5)}{' '*(20-pct//5)}] {done[0]}/{total} ({pct}%) BE{bce}",end="",flush=True)
-        pool=[]
-        for i,raw in enumerate(numbers):
-            while threading.active_count()>VIES_WORKERS*3+20: time.sleep(0.05)
-            t=threading.Thread(target=process,args=(i,raw),daemon=True)
-            t.start(); pool.append(t)
-            time.sleep(VIES_DELAY/VIES_WORKERS)
-        for t in pool: t.join()
-        print(f"\n  OK {total}\n")
-        self._json(results)
-
-    def _serve_html(self):
-        p=os.path.join(os.path.dirname(os.path.abspath(__file__)),"app.html")
-        if not os.path.exists(p):
-            self.send_response(404); self.end_headers()
-            self.wfile.write(b"app.html introuvable"); return
-        with open(p,"rb") as f: content=f.read()
-        self.send_response(200)
-        self.send_header("Content-Type","text/html; charset=utf-8")
-        self.send_header("Content-Length",str(len(content)))
-        self._cors(); self.end_headers(); self.wfile.write(content)
-
-    def _json(self,data):
-        pl=json.dumps(data,ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type","application/json; charset=utf-8")
-        self.send_header("Content-Length",str(len(pl)))
-        self._cors(); self.end_headers(); self.wfile.write(pl)
-
-
-class ThreadedServer(socketserver.ThreadingMixIn,socketserver.TCPServer):
-    allow_reuse_address=True; daemon_threads=True
-
-
-def main():
-    is_cloud = os.environ.get("RENDER") or os.environ.get("RAILWAY_ENVIRONMENT")
-    print("="*60)
-    print("  VIES + BCE + PEPPOL Checker — Dental Addict v4.1")
-    print("="*60)
-    print(f"  Port : {PORT}  {'[Cloud]' if is_cloud else '[Local]'}")
-    print("="*60)
-    bind = "0.0.0.0" if is_cloud else "localhost"
-    with ThreadedServer((bind,PORT),Handler) as srv:
-        if not is_cloud:
-            import webbrowser
-            threading.Thread(target=lambda:(time.sleep(1.2),webbrowser.open(f"http://localhost:{PORT}")),daemon=True).start()
-        try: srv.serve_forever()
-        except KeyboardInterrupt: print("\n  Arret.")
-
-if __name__=="__main__":
-    main()
