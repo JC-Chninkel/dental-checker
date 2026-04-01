@@ -93,6 +93,27 @@ textarea:focus { border-color:#003087; }
 
 .footer { text-align:center; font-size:11px; color:#9ca3af; margin-top:14px; }
 
+/* Prospects */
+.p-card { background:white; border:1px solid #e5e7eb; border-radius:12px; margin-bottom:10px; overflow:hidden; }
+.p-head { display:flex; align-items:flex-start; justify-content:space-between; padding:12px 16px; gap:8px; flex-wrap:wrap; }
+.p-nom  { font-size:14px; font-weight:700; color:#1a1a2e; }
+.p-bce  { font-family:'Courier New',monospace; font-size:11px; color:#6b7280; margin-top:2px; }
+.p-body { display:grid; grid-template-columns:1fr 1fr 1fr; padding:0 16px 12px; gap:6px; font-size:12px; }
+@media(max-width:600px){ .p-body{grid-template-columns:1fr 1fr;} }
+.p-field { display:flex; flex-direction:column; gap:1px; }
+.p-lbl  { font-size:10px; color:#9ca3af; text-transform:uppercase; letter-spacing:.06em; }
+.p-val  { color:#374151; font-weight:500; }
+.p-val a{ color:#003087; text-decoration:none; }
+.p-val a:hover{ text-decoration:underline; }
+.p-foot { padding:8px 16px; background:#f9fafb; border-top:1px solid #f3f4f6; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.s-badge { padding:3px 10px; border-radius:99px; font-size:11px; font-weight:700; cursor:pointer; border:none; }
+.s-new  { background:#dbeafe; color:#1d4ed8; }
+.s-done { background:#dcfce7; color:#166534; }
+.s-skip { background:#fee2e2; color:#991b1b; }
+.stat-chip { padding:6px 14px; border-radius:10px; font-size:12px; font-weight:700; background:#f0f2f5; }
+.p-empty { text-align:center; padding:40px 20px; color:#9ca3af; }
+.p-scanning { display:flex; align-items:center; gap:10px; padding:16px; background:#f0f5ff; border-radius:10px; font-size:13px; color:#003087; margin-bottom:12px; }
+
 .sr-count{ font-size:12px; color:#6b7280; margin-bottom:8px; font-weight:600; }
 </style>
 </head>
@@ -116,6 +137,7 @@ textarea:focus { border-color:#003087; }
     <div class="tabs">
       <button class="tab active" onclick="switchTab('single')">🔍 Unitaire</button>
       <button class="tab" onclick="switchTab('batch')">📋 En lot</button>
+      <button class="tab" onclick="switchTab('prospects')">🦷 Prospects</button>
     </div>
 
     <!-- SINGLE -->
@@ -130,6 +152,47 @@ textarea:focus { border-color:#003087; }
       <p class="hint">VIES + BCE + PEPPOL en parallèle</p>
       <div id="res-single" style="margin-top:14px"></div>
     </div>
+
+    <!-- PROSPECTS -->
+    <div id="pane-prospects" style="display:none">
+
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+        <div>
+          <div style="font-size:14px;font-weight:700;color:#003087">Nouveaux cabinets dentaires en Belgique</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px">Scan hebdomadaire BCE · NACE 8623 · Scan automatique chaque lundi 8h</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-s" onclick="runScan()" id="btn-scan">🔄 Scanner maintenant</button>
+          <button class="btn btn-s" onclick="exportProspects()" id="btn-export-p">⬇ Export Excel</button>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div id="p-stats" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
+
+      <!-- Filtres -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+        <input type="text" id="p-search" placeholder="Filtrer par nom, ville, email..." 
+          style="flex:1;min-width:180px;height:36px;font-size:13px" oninput="renderProspects()"/>
+        <select id="p-filter-status" onchange="renderProspects()" style="height:36px;border:1.5px solid #d1d5db;border-radius:8px;padding:0 10px;font-size:13px;background:white">
+          <option value="">Tous les statuts</option>
+          <option value="Nouveau">Nouveau</option>
+          <option value="Contacté">Contacté</option>
+          <option value="Sans suite">Sans suite</option>
+        </select>
+        <select id="p-sort" onchange="renderProspects()" style="height:36px;border:1.5px solid #d1d5db;border-radius:8px;padding:0 10px;font-size:13px;background:white">
+          <option value="date_desc">Plus récents</option>
+          <option value="date_asc">Plus anciens</option>
+          <option value="nom">Nom A→Z</option>
+          <option value="ville">Ville A→Z</option>
+        </select>
+      </div>
+
+      <!-- Liste prospects -->
+      <div id="p-list"></div>
+
+    </div>
+
 
     <!-- BATCH -->
     <div id="pane-batch" style="display:none">
@@ -167,10 +230,11 @@ function norm(r) {
   if(v.length===9) v='0'+v; return v;
 }
 function switchTab(t) {
-  document.getElementById('pane-single').style.display=t==='single'?'block':'none';
-  document.getElementById('pane-batch').style.display=t==='batch'?'block':'none';
+  ['single','batch','prospects'].forEach(p=>
+    document.getElementById('pane-'+p).style.display=t===p?'block':'none');
   document.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('active',
-    (i===0&&t==='single')||(i===1&&t==='batch')));
+    (i===0&&t==='single')||(i===1&&t==='batch')||(i===2&&t==='prospects')));
+  if(t==='prospects') loadProspects();
 }
 
 function renderCard(item) {
@@ -371,6 +435,153 @@ async function goSearch() {
   btn.disabled=false; btn.textContent='Rechercher';
 }
 
+
+// ── Prospects ────────────────────────────────────────────────
+let allProspects = [];
+let scanHistory  = [];
+
+async function loadProspects() {
+  const zone = document.getElementById('p-list');
+  zone.innerHTML = '<div class="load-card"><div class="spinner"></div><div class="spin-txt">Chargement des prospects...</div></div>';
+  try {
+    const r    = await fetch(API+'/prospects/data');
+    const data = await r.json();
+    allProspects = data.prospects || [];
+    scanHistory  = data.scans    || [];
+    renderStats();
+    renderProspects();
+  } catch(e) {
+    zone.innerHTML = `<div class="p-empty">Erreur chargement : ${e.message}</div>`;
+  }
+}
+
+function renderStats() {
+  const zone   = document.getElementById('p-stats');
+  const total  = allProspects.length;
+  const nv     = allProspects.filter(p=>p.statut_contact==='Nouveau').length;
+  const done   = allProspects.filter(p=>p.statut_contact==='Contacté').length;
+  const email  = allProspects.filter(p=>p.email).length;
+  const lastScan = scanHistory.length ? scanHistory[scanHistory.length-1].date : '—';
+  zone.innerHTML = `
+    <div class="stat-chip">🦷 ${total} prospect(s)</div>
+    <div class="stat-chip" style="background:#dbeafe;color:#1d4ed8">🆕 ${nv} nouveau(x)</div>
+    <div class="stat-chip" style="background:#dcfce7;color:#166534">✓ ${done} contacté(s)</div>
+    <div class="stat-chip" style="background:#ede9fe;color:#6d28d9">📧 ${email} avec email</div>
+    <div class="stat-chip" style="background:#f3f4f6;color:#6b7280">Dernier scan : ${lastScan}</div>
+  `;
+}
+
+function renderProspects() {
+  const zone   = document.getElementById('p-list');
+  const search = document.getElementById('p-search').value.toLowerCase();
+  const status = document.getElementById('p-filter-status').value;
+  const sort   = document.getElementById('p-sort').value;
+
+  let filtered = allProspects.filter(p => {
+    const matchS = !status || p.statut_contact === status;
+    const matchQ = !search || [p.nom,p.adresse,p.ville,p.email,p.telephone,p.website]
+                              .some(v => v && v.toLowerCase().includes(search));
+    return matchS && matchQ;
+  });
+
+  filtered.sort((a,b) => {
+    if(sort==='date_desc') return (b.scan_date||'').localeCompare(a.scan_date||'');
+    if(sort==='date_asc')  return (a.scan_date||'').localeCompare(b.scan_date||'');
+    if(sort==='nom')       return (a.nom||'').localeCompare(b.nom||'');
+    if(sort==='ville')     return (a.ville||'').localeCompare(b.ville||'');
+    return 0;
+  });
+
+  if(!filtered.length) {
+    zone.innerHTML = `<div class="p-empty">
+      ${allProspects.length === 0
+        ? '🦷 Aucun prospect — cliquez "Scanner maintenant" pour lancer le premier scan BCE'
+        : '🔍 Aucun résultat pour ce filtre'}
+    </div>`;
+    return;
+  }
+
+  zone.innerHTML = `<div style="font-size:12px;color:#6b7280;margin-bottom:8px">${filtered.length} résultat(s)</div>`
+    + filtered.map(p => renderProspectCard(p)).join('');
+}
+
+function renderProspectCard(p) {
+  const sc = p.statut_contact === 'Contacté' ? 's-done' : p.statut_contact === 'Sans suite' ? 's-skip' : 's-new';
+
+  const emailHtml = p.email
+    ? `<a href="mailto:${p.email}">${p.email}</a>`
+    : '<span style="color:#d1d5db">—</span>';
+
+  const webHtml = p.website
+    ? `<a href="${p.website.startsWith('http')?p.website:'https://'+p.website}" target="_blank">${p.website.replace(/^https?:\/\//, '')}</a>`
+    : '<span style="color:#d1d5db">—</span>';
+
+  const naces = (p.nace_codes||[]).join(', ') || '8623';
+
+  return `<div class="p-card">
+    <div class="p-head">
+      <div>
+        <div class="p-nom">${p.nom || '(nom non disponible)'}</div>
+        <div class="p-bce">BE${p.bce} · Créé le ${p.date_creation||'?'} · Scan : ${p.scan_date||'?'}</div>
+      </div>
+      <span class="s-badge ${sc}">${p.statut_contact||'Nouveau'}</span>
+    </div>
+    <div class="p-body">
+      <div class="p-field"><span class="p-lbl">Adresse</span><span class="p-val">${p.adresse||'—'}</span></div>
+      <div class="p-field"><span class="p-lbl">Ville</span><span class="p-val">${p.ville||'—'} ${p.cp?'('+p.cp+')':''}</span></div>
+      <div class="p-field"><span class="p-lbl">Forme juridique</span><span class="p-val">${p.forme_juridique||'—'}</span></div>
+      <div class="p-field"><span class="p-lbl">Téléphone</span><span class="p-val">${p.telephone||'—'}</span></div>
+      <div class="p-field"><span class="p-lbl">Email</span><span class="p-val">${emailHtml}</span></div>
+      <div class="p-field"><span class="p-lbl">Site Web</span><span class="p-val">${webHtml}</span></div>
+      <div class="p-field"><span class="p-lbl">NACE</span><span class="p-val" style="color:#1d4ed8">${naces} — Pratique dentaire</span></div>
+    </div>
+    <div class="p-foot">
+      <span style="font-size:11px;color:#6b7280">Statut contact :</span>
+      <button class="s-badge s-new"  onclick="setStatus('${p.bce}','Nouveau',this)">Nouveau</button>
+      <button class="s-badge s-done" onclick="setStatus('${p.bce}','Contacté',this)">Contacté</button>
+      <button class="s-badge s-skip" onclick="setStatus('${p.bce}','Sans suite',this)">Sans suite</button>
+      <a href="https://kbopub.economie.fgov.be/kbopub/zoeknummerform.html?nummer=${p.bce}&lang=fr" 
+         target="_blank" style="margin-left:auto;font-size:11px;color:#003087">Fiche BCE ↗</a>
+    </div>
+  </div>`;
+}
+
+async function setStatus(bce, status, btn) {
+  await fetch(`${API}/prospects/status?bce=${bce}&status=${encodeURIComponent(status)}`);
+  const p = allProspects.find(x=>x.bce===bce);
+  if(p) { p.statut_contact = status; renderProspects(); renderStats(); }
+}
+
+async function runScan() {
+  const btn  = document.getElementById('btn-scan');
+  const zone = document.getElementById('p-list');
+  btn.disabled = true; btn.textContent = '⏳ Scan en cours...';
+  zone.insertAdjacentHTML('afterbegin', '<div class="p-scanning"><div class="spinner"></div>Scan BCE en cours — téléchargement du fichier de modifications NACE 8623... (peut prendre 1-2 min)</div>');
+  try {
+    await fetch(API+'/prospects/scan');
+    // Polling toutes les 5s pendant max 3 min
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      const r    = await fetch(API+'/prospects/data');
+      const data = await r.json();
+      if(data.scans && data.scans.length > scanHistory.length || attempts > 36) {
+        clearInterval(poll);
+        allProspects = data.prospects || [];
+        scanHistory  = data.scans    || [];
+        document.querySelector('.p-scanning')?.remove();
+        renderStats(); renderProspects();
+        btn.disabled = false; btn.textContent = '🔄 Scanner maintenant';
+      }
+    }, 5000);
+  } catch(e) {
+    btn.disabled = false; btn.textContent = '🔄 Scanner maintenant';
+  }
+}
+
+function exportProspects() {
+  window.location.href = API+'/prospects/export';
+}
 
 function exportCSV() {
   if(!batchResults.length) return;

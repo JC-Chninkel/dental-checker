@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """VIES + BCE + PEPPOL Checker — Dental Addict v5"""
+# Prospects module chargé dynamiquement
+try:
+    import prospects as _prospects_module
+    _PROSPECTS_AVAILABLE = True
+except ImportError:
+    _PROSPECTS_AVAILABLE = False
 
 import http.server, socketserver, urllib.request, urllib.error, urllib.parse
 import json, os, threading, time, re, gzip as gz
@@ -259,6 +265,52 @@ class Handler(http.server.BaseHTTPRequestHandler):
             bce=normalize(p.get("bce",[""])[0])
             print(f"  /check BE{bce}"); self._json(check_all(bce))
         elif self.path=="/health": self._json({"status":"ok","version":"5"})
+        elif self.path=="/prospects/data":
+            if _PROSPECTS_AVAILABLE:
+                self._json(_prospects_module.load_prospects())
+            else:
+                self._json({"scans":[],"prospects":[],"error":"Module prospects non disponible"})
+        elif self.path=="/prospects/scan":
+            if _PROSPECTS_AVAILABLE:
+                def _do_scan():
+                    _prospects_module.run_scan()
+                threading.Thread(target=_do_scan, daemon=True).start()
+                self._json({"ok":True,"message":"Scan démarré en arrière-plan"})
+            else:
+                self._json({"ok":False,"error":"Module prospects non disponible"})
+        elif self.path.startswith("/prospects/status"):
+            p=urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            bce=p.get("bce",[""])[0]; status=p.get("status",["Contacté"])[0]
+            if _PROSPECTS_AVAILABLE and bce:
+                store=_prospects_module.load_prospects()
+                for pr in store["prospects"]:
+                    if pr["bce"]==bce: pr["statut_contact"]=status; break
+                _prospects_module.save_prospects(store)
+                self._json({"ok":True})
+            else:
+                self._json({"ok":False})
+        elif self.path=="/prospects/export":
+            if not _PROSPECTS_AVAILABLE:
+                self._json({"ok":False,"error":"Module non disponible"}); return
+            store=_prospects_module.load_prospects()
+            import tempfile, os as _os
+            tmp=tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+            tmp.close()
+            ok, fmt=_prospects_module.export_prospects_excel(store["prospects"], tmp.name)
+            if ok:
+                ext="xlsx" if fmt=="xlsx" else "csv"
+                fpath=tmp.name if fmt=="xlsx" else tmp.name.replace(".xlsx",".csv")
+                with open(fpath,"rb") as xf: data=xf.read()
+                _os.unlink(tmp.name)
+                ctype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if fmt=="xlsx" else "text/csv"
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Disposition", f'attachment; filename="prospects_dentaires.{ext}"')
+                self.send_header("Content-Length", str(len(data)))
+                self._cors(); self.end_headers(); self.wfile.write(data)
+            else:
+                self._json({"ok":False,"error":"Export échoué"})
+            return
         else: self.send_response(404); self.end_headers()
     def do_POST(self):
         if self.path!="/batch": return
@@ -305,6 +357,10 @@ def main():
         if not is_cloud:
             import webbrowser
             threading.Thread(target=lambda:(time.sleep(1.2),webbrowser.open(f"http://localhost:{PORT}")),daemon=True).start()
+        # Démarrer le scheduler prospects
+        if _PROSPECTS_AVAILABLE:
+            _prospects_module.start_weekly_scheduler()
+            print("  [Prospects] Scheduler hebdomadaire actif (lundi 8h)")
         try: srv.serve_forever()
         except KeyboardInterrupt: print("\n  Arret.")
 
